@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-05-06T14:30:00.000000",
+  "brokers": {
+    "fred": {
+      "enabled": true,
+      "api_key": "YOUR_FRED_API_KEY",
+      "description": "FRED (Federal Reserve Economic Data) API - 免费无限制",
+      "note": "需要在 https://fred.stlouisfed.org/docs/api/api_key.html 申请"
+    },
+    "finnhub": {
+      "enabled": true,
+      "api_key": "d7ta931r01qugn09u8cgd7ta931r01qugn09u8d0",
+      "note": "免费版限制: 60 次/分钟"
+    },
+    "polygon": {
+      "enabled": true,
+      "api_key": "Dn_2jYC2LIANmtY3a0rbY6XX_5tdvp4w",
+      "note": "免费版限制: 5 次/分钟"
+    },
+    "alpha_vantage": {
+      "enabled": true,
+      "api_key": "0UBKL7WU4ZE6J1Q5",
+      "note": "免费版限制: 5 次/分钟, 100 次/天",
+      "description": "Alpha Vantage - 股票、外汇、大宗商品数据"
+    }
+  },
+  "notes": {
+    "fred": "用于获取联邦基金利率、大宗商品价格（黄金、原油、天然气）",
+    "finnhub": "用于获取美股实时价格",
+    "polygon": "用于获取美股备用数据源",
+    "alpha_vantage": "备份数据源，支持股票、外汇、大宗商品（WTI、布伦特、天然气、铜、铝）",
+    "exchangerate_api": "免费汇率 API，无需 API Key"
+  }
+}

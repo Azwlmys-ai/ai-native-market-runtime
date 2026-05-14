@@ -1,0 +1,11 @@
+{
+  "files.exclude": {
+    "/Users/libo/polymarket_okx": true
+  },
+  "search.exclude": {
+    "/Users/libo/polymarket_okx/**": true,
+    "/Users/libo/.hermes/home/**": true
+  },
+  "explorer.excludeGitIgnore": true,
+  "window.title": "polymarket_arbitrage"
+}

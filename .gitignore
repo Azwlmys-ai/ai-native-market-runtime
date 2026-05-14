@@ -1,0 +1,44 @@
+# API keys / secrets
+config/llm_config.json
+config/*.bak
+
+# Runtime output
+logs/
+data/
+backups/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+.venv/
+venv/
+
+# Claude Code local / backup settings (machine-specific paths)
+.claude/settings.local.json
+.claude/*.bak*
+
+# macOS
+.DS_Store
+
+# pytest cache
+.pytest_cache/
+
+# Dead backup / disabled files
+*.backup
+*.disabled
+
+# Orphan root-level test artifacts
+comprehensive_test_report.json
+load_balancer_test_report.json

@@ -1,0 +1,67 @@
+{
+  "account": {
+    "starting_balance": 10000.0,
+    "current_balance": 7475.82,
+    "positions_value": 2246.75,
+    "total_value": 9722.58,
+    "pnl": -277.42,
+    "drawdown_percent": -2.77
+  },
+  "risk_management": {
+    "max_position_size": 200,
+    "min_position_size": 30,
+    "kelly_fraction": 0.05,
+    "min_confidence": 35,
+    "drawdown_warning": 10,
+    "drawdown_halt": 20,
+    "max_correlation_exposure": 30
+  },
+  "trading_costs": {
+    "crypto_fee": 0.018,
+    "sports_fee": 0.008,
+    "slippage_tiers": {
+      "0-100": 0.005,
+      "100-200": 0.010,
+      "200+": 0.015
+    },
+    "min_profit_margin": 0.05
+  },
+  "agents": {
+    "enabled": [
+      "agent_a",
+      "agent_b",
+      "agent_d",
+      "agent_e",
+      "agent_f",
+      "agent_g",
+      "agent_h",
+      "agent_i",
+      "agent_j",
+      "agent_k",
+      "agent_m",
+      "agent_okx_funding",
+      "agent_p",
+      "strategy_manager"
+    ],
+    "scan_interval": 30
+  },
+  "data_sources": {
+    "polymarket": true,
+    "google_news": true,
+    "noaa": true,
+    "fred": true,
+    "okx": true,
+    "whale_wallets": true,
+    "onchain": false
+  },
+  "telegram": {
+    "enabled": true,
+    "bot_token_env": "TELEGRAM_BOT_TOKEN",
+    "chat_id_env": "TELEGRAM_CHAT_ID"
+  },
+  "pm_trader": {
+    "path": "pm-trader",
+    "data_dir": "home/.pm-trader",
+    "account": "default"
+  }
+}

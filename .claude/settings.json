@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d,indent=2,ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k!='approved_signals'},indent=2,ensure_ascii=False\\)\\)\")",
+      "Bash(xargs -I{} basename {})",
+      "Bash(ps eww *)",
+      "Bash(bash scripts/monitor_2h.sh)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'共 {len\\(d\\)} 条'\\); print\\(json.dumps\\(d[:2], indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -m pytest tests/test_smoke.py -q)",
+      "Bash(cat /Users/libo/.hermes/home/scripts/polymarket_arbitrage_script.sh 2>/dev/null | head -20)",
+      "Read(//Users/libo/.hermes/home/scripts/**)",
+      "Bash(EXECUTOR_DRY_RUN=1 PM_TRADER_PATH=/tmp/mock_pm_trader.sh python3 main.py --mode once)",
+      "Bash(cat)",
+      "Bash(chmod +x /tmp/mock_pm_trader.sh)",
+      "Read(//private/tmp/**)",
+      "Bash(python3 -c \"from utils.signals import ensure_signal_timestamps; print\\('✅ utils.signals OK'\\)\")",
+      "Bash(# 确保 *)",
+      "Bash(EXECUTOR_DRY_RUN=1 PM_TRADER_PATH=/tmp/mock_pm_trader.sh bash scripts/monitor_2h.sh)",
+      "Bash(Read /private/tmp/claude-501/-Users-libo--hermes-polymarket-arbitrage/505a199d-8155-404e-8d1a-3277e9308ddc/tasks/bl29zt7pt.output)",
+      "Bash(python3)",
+      "Bash(/tmp/mock_pm_trader.sh balance *)",
+      "Bash(grep -rn \"sk-\\\\|xai-\\\\|pawmaas\\\\|api_key\\\\s*=\\\\s*['\\\\\"][^'\\\\\"]\\\\{10,\\\\}\" --include=\"*.py\" --include=\"*.json\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k,'=',str\\(v\\)[:20]+'...'\\) for k,v in d.items\\(\\) if 'key' in k.lower\\(\\) or 'secret' in k.lower\\(\\)]\")",
+      "Bash(xargs ls -la)",
+      "Bash(ls /Users/libo/.hermes/shared/ 2>/dev/null && echo \"EXISTS\" || echo \"NOT EXISTS\")",
+      "Read(//Users/libo/.hermes/shared/**)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(m.get\\('from','?'\\), m.get\\('to','?'\\), str\\(m.get\\('content',''\\)\\)[:60]\\) for m in d[-5:]]\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(m.get\\('from','?'\\), '->', m.get\\('to','?'\\), str\\(m.get\\('content',''\\)\\)[:80]\\) for m in d[-8:]]\")",
+      "Bash(rm -f test_claude_api.py config/llm_config.json.bak config/llm_config.json.bak_20260512_125707)",
+      "Bash(md5 signal_executor.py executors/signal_executor.py sell_executor.py executors/sell_executor.py orchestrator.py orchestrator_advanced.py)",
+      "Bash(python3 -m pytest tests/test_smoke.py -v --tb=short -q)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage init)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage status --short)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage check-ignore -v config/llm_config.json logs data backups)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage add .)"
+    ],
+    "additionalDirectories": [
+      "/Users/libo/.hermes/polymarket_arbitrage",
+      "/private/tmp"
+    ]
+  }
+}

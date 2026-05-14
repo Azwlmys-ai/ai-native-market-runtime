@@ -1,0 +1,13 @@
+{
+  "requirements": "粘贴 Hermes 会话里对本次开发的原始要求。说明必须满足的行为、禁止事项、发布边界。",
+  "summary": "开发者对本次改动的简短说明。",
+  "files": [
+    "agents/example_agent.py",
+    "orchestrator.py"
+  ],
+  "tests": [
+    "python3 -m pytest tests/test_smoke.py -v"
+  ],
+  "release_target": "hermes",
+  "notify_to": "hermes"
+}

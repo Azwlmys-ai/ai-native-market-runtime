@@ -1,0 +1,22 @@
+{
+  "folders": [
+    {
+      "name": "polymarket_arbitrage",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "window.title": "polymarket_arbitrage — ${activeEditorShort}",
+    "files.exclude": {
+      "**/.git": true
+    },
+    "search.exclude": {
+      "/Users/libo/polymarket_okx/**": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python"
+    ]
+  }
+}
