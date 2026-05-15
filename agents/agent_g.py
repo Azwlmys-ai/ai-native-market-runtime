@@ -12,7 +12,12 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
-from llm_helper import call_llm
+try:
+    from llm_helper import call_llm
+    _LLM_IMPORT_ERROR = None
+except Exception as e:
+    call_llm = None
+    _LLM_IMPORT_ERROR = e
 
 class AgentG:
     def __init__(self, base_dir=None):
@@ -261,6 +266,8 @@ class AgentG:
                 markets[market] = []
             markets[market].append(trade)
         
+        trade_stats = self._build_trade_stats(trades)
+        
         prompt = f"""你是 Polymarket 交易系统的复盘分析师。请分析以下交易数据，找出成功和失败的模式。
 
 ## 交易统计
@@ -298,6 +305,8 @@ class AgentG:
 """
         
         try:
+            if call_llm is None:
+                raise RuntimeError(f"LLM helper unavailable: {_LLM_IMPORT_ERROR}")
             response = call_llm(
                 prompt=prompt,
                 model="gpt-5.4-mini",
@@ -309,15 +318,124 @@ class AgentG:
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
                 analysis = json.loads(json_match.group())
+                analysis.update({
+                    "llm_available": True,
+                    "fallback_used": False,
+                    "dry_run": trade_stats["dry_run"],
+                    "synthetic": trade_stats["synthetic"],
+                    "trade_stats": trade_stats,
+                })
                 self.log("✅ 交易分析完成")
                 return analysis
             else:
                 self.log("⚠️  无法解析分析结果")
-                return None
+                return self._fallback_trade_analysis(trades, trade_stats, "llm_parse_error")
         
         except Exception as e:
             self.log(f"❌ 交易分析失败: {e}")
-            return None
+            return self._fallback_trade_analysis(trades, trade_stats, str(e))
+
+    def _build_trade_stats(self, trades):
+        """汇总交易数据，供 LLM 和 deterministic fallback 共用。"""
+        closed_trades = [t for t in trades if t.get("outcome") == "closed"]
+        open_trades = [t for t in trades if t.get("outcome") == "open"]
+        winning_trades = [t for t in closed_trades if t.get("pnl", 0) > 0]
+        losing_trades = [t for t in closed_trades if t.get("pnl", 0) < 0]
+        flat_trades = [t for t in closed_trades if t.get("pnl", 0) == 0]
+        total_pnl = sum(t.get("pnl", 0) for t in closed_trades)
+        total_closed_amount = sum(t.get("amount_usd", 0) for t in closed_trades)
+        avg_pnl = total_pnl / len(closed_trades) if closed_trades else 0
+        win_rate = len(winning_trades) / len(closed_trades) if closed_trades else 0
+
+        market_pnl = {}
+        for trade in closed_trades:
+            market = trade.get("market_slug", "unknown")
+            market_pnl[market] = market_pnl.get(market, 0) + trade.get("pnl", 0)
+
+        best_markets = sorted(
+            [{"market_slug": k, "pnl": v} for k, v in market_pnl.items()],
+            key=lambda item: item["pnl"],
+            reverse=True,
+        )
+        worst_markets = sorted(
+            [{"market_slug": k, "pnl": v} for k, v in market_pnl.items()],
+            key=lambda item: item["pnl"],
+        )
+
+        return {
+            "total_trades": len(trades),
+            "closed_trades": len(closed_trades),
+            "open_trades": len(open_trades),
+            "winning_trades": len(winning_trades),
+            "losing_trades": len(losing_trades),
+            "flat_trades": len(flat_trades),
+            "win_rate": round(win_rate, 4),
+            "total_pnl": round(total_pnl, 4),
+            "avg_closed_trade_pnl": round(avg_pnl, 4),
+            "total_closed_amount_usd": round(total_closed_amount, 4),
+            "best_markets": best_markets[:3],
+            "worst_markets": worst_markets[:3],
+            "dry_run": self._is_dry_run_mode() or any(t.get("dry_run") for t in trades),
+            "synthetic": any(t.get("synthetic") for t in trades),
+        }
+
+    def _fallback_trade_analysis(self, trades, trade_stats, reason):
+        """LLM 不可用时的确定性复盘摘要，基于 closed trades 统计生成。"""
+        closed_count = trade_stats["closed_trades"]
+        win_rate_pct = trade_stats["win_rate"] * 100
+        total_pnl = trade_stats["total_pnl"]
+        best = trade_stats["best_markets"]
+        worst = trade_stats["worst_markets"]
+
+        success_patterns = []
+        failure_patterns = []
+        recommendations = []
+
+        if best and best[0]["pnl"] > 0:
+            success_patterns.append(
+                f"正收益市场集中在 {best[0]['market_slug']}，closed PnL={best[0]['pnl']:.2f}"
+            )
+        if trade_stats["winning_trades"]:
+            success_patterns.append(
+                f"{trade_stats['winning_trades']}/{closed_count} 笔已平仓交易盈利，胜率 {win_rate_pct:.1f}%"
+            )
+
+        if worst and worst[0]["pnl"] < 0:
+            failure_patterns.append(
+                f"亏损市场集中在 {worst[0]['market_slug']}，closed PnL={worst[0]['pnl']:.2f}"
+            )
+        if trade_stats["losing_trades"]:
+            failure_patterns.append(
+                f"{trade_stats['losing_trades']}/{closed_count} 笔已平仓交易亏损，需要限制同类信号仓位"
+            )
+
+        if not success_patterns:
+            success_patterns.append("暂无稳定成功模式；样本量仍需继续累积")
+        if not failure_patterns:
+            failure_patterns.append("暂无显著失败模式；保持 dry-run 观察")
+
+        if total_pnl >= 0:
+            recommendations.append("继续保留正收益市场类型，但维持 dry-run 小额验证")
+        else:
+            recommendations.append("暂停放大同类策略，优先复核亏损市场的价格与流动性假设")
+        recommendations.append("对亏损 closed trades 对应市场增加二次数据源校验")
+        recommendations.append("保持 EXECUTOR_DRY_RUN=1 时只刷新学习文件，不触发真实交易")
+
+        return {
+            "success_patterns": success_patterns,
+            "failure_patterns": failure_patterns,
+            "recommendations": recommendations,
+            "key_insights": (
+                f"LLM unavailable; fallback summary used closed-trade stats: "
+                f"{closed_count} closed, win_rate={win_rate_pct:.1f}%, total_pnl={total_pnl:.2f}."
+            ),
+            "llm_available": False,
+            "fallback_used": True,
+            "fallback_reason": reason,
+            "dry_run": trade_stats["dry_run"],
+            "synthetic": trade_stats["synthetic"],
+            "trade_stats": trade_stats,
+        }
     
     def analyze_rejections(self, rejected_signals):
         """分析被拒绝的信号"""
@@ -377,6 +495,8 @@ class AgentG:
 """
         
         try:
+            if call_llm is None:
+                raise RuntimeError(f"LLM helper unavailable: {_LLM_IMPORT_ERROR}")
             response = call_llm(
                 prompt=prompt,
                 model="deepseek-r1",
@@ -388,20 +508,94 @@ class AgentG:
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
                 analysis = json.loads(json_match.group())
+                analysis.update({
+                    "llm_available": True,
+                    "fallback_used": False,
+                    "dry_run": self._is_dry_run_mode(),
+                    "synthetic": self._is_dry_run_mode(),
+                    "rejection_stats": {
+                        "total_rejected": len(rejected_signals),
+                        "reason_distribution": rejection_reasons,
+                    },
+                })
                 self.log("✅ 拒绝信号分析完成")
                 return analysis
             else:
                 self.log("⚠️  无法解析分析结果")
-                return None
+                return self._fallback_rejection_analysis(
+                    rejected_signals,
+                    rejection_reasons,
+                    "llm_parse_error",
+                )
         
         except Exception as e:
             self.log(f"❌ 拒绝信号分析失败: {e}")
-            return None
+            return self._fallback_rejection_analysis(
+                rejected_signals,
+                rejection_reasons,
+                str(e),
+            )
+
+    def _fallback_rejection_analysis(self, rejected_signals, rejection_reasons, reason):
+        """LLM 不可用时基于拒绝原因分布生成确定性摘要。"""
+        sorted_reasons = sorted(
+            rejection_reasons.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        top_reason = sorted_reasons[0][0] if sorted_reasons else "其他"
+        common_mistakes = [
+            f"主要拒绝原因为 {name}（{count} 次）"
+            for name, count in sorted_reasons[:3]
+        ]
+        if not common_mistakes:
+            common_mistakes.append("暂无足够拒绝原因样本")
+
+        unreliable_sources = []
+        if "数据质量问题" in rejection_reasons:
+            unreliable_sources.append("信号中未充分交叉验证的数据源")
+        if not unreliable_sources:
+            unreliable_sources.append("未识别出特定不可靠数据源")
+
+        suggestions = [
+            f"优先减少触发 {top_reason} 的信号进入执行链路",
+            "保留 Agent M fail-closed 行为，LLM 异常时继续拒绝而不是放行",
+            "dry-run 阶段继续记录 rejected_signals，用于下一轮统计复盘",
+        ]
+
+        return {
+            "common_mistakes": common_mistakes,
+            "unreliable_sources": unreliable_sources,
+            "improvement_suggestions": suggestions,
+            "key_insights": (
+                f"LLM unavailable; fallback summary used {len(rejected_signals)} "
+                f"rejected signals and reason distribution."
+            ),
+            "llm_available": False,
+            "fallback_used": True,
+            "fallback_reason": reason,
+            "dry_run": self._is_dry_run_mode(),
+            "synthetic": self._is_dry_run_mode(),
+            "rejection_stats": {
+                "total_rejected": len(rejected_signals),
+                "reason_distribution": rejection_reasons,
+            },
+        }
     
     def save_learning_report(self, trade_analysis, rejection_analysis):
         """保存学习报告"""
+        analyses = [a for a in (trade_analysis, rejection_analysis) if a]
+        llm_available = all(a.get("llm_available", True) for a in analyses)
+        fallback_used = any(a.get("fallback_used", False) for a in analyses)
+        dry_run = self._is_dry_run_mode() or any(a.get("dry_run", False) for a in analyses)
+        synthetic = any(a.get("synthetic", False) for a in analyses)
+        
         report = {
             "timestamp": datetime.now().isoformat(),
+            "llm_available": llm_available,
+            "fallback_used": fallback_used,
+            "dry_run": dry_run,
+            "synthetic": synthetic,
             "trade_analysis": trade_analysis,
             "rejection_analysis": rejection_analysis
         }
@@ -437,9 +631,9 @@ class AgentG:
         self.log(f"✅ 已更新学习历史（保留 {len(history)} 条记录）")
         
         # P0: 同时更新 learning_knowledge_base.json（Agent M / Agent P / Strategy Manager 读取）
-        self._save_learning_knowledge_base(rejection_analysis)
+        self._save_learning_knowledge_base(rejection_analysis, report)
     
-    def _save_learning_knowledge_base(self, rejection_analysis):
+    def _save_learning_knowledge_base(self, rejection_analysis, report=None):
         """P0 修复：将 Agent G 的复盘洞察写入 learning_knowledge_base.json
         下游 Agent M 在信号审查时读取 rejection_prompt_enhancement 注入 prompt。"""
         kb_file = self.data_dir / "learning_knowledge_base.json"
@@ -480,6 +674,24 @@ class AgentG:
         
         kb["last_updated"] = datetime.now().isoformat()
         kb["source"] = "agent_g_post_mortem"
+        if report:
+            kb["llm_available"] = report.get("llm_available", True)
+            kb["fallback_used"] = report.get("fallback_used", False)
+            kb["dry_run"] = report.get("dry_run", False)
+            kb["synthetic"] = report.get("synthetic", False)
+            trade_analysis = report.get("trade_analysis") or {}
+            rejection_summary = report.get("rejection_analysis") or {}
+            kb["agent_g_latest_summary"] = {
+                "timestamp": report.get("timestamp"),
+                "llm_available": report.get("llm_available", True),
+                "fallback_used": report.get("fallback_used", False),
+                "dry_run": report.get("dry_run", False),
+                "synthetic": report.get("synthetic", False),
+                "trade_key_insights": trade_analysis.get("key_insights"),
+                "trade_stats": trade_analysis.get("trade_stats"),
+                "rejection_key_insights": rejection_summary.get("key_insights"),
+                "rejection_stats": rejection_summary.get("rejection_stats"),
+            }
         
         with open(kb_file, 'w') as f:
             json.dump(kb, f, indent=2, ensure_ascii=False)
