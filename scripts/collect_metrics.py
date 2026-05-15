@@ -46,13 +46,22 @@ def main():
 
     # ── review results ───────────────────────────────────────────────
     approved = rejected = 0
+    real_signals = paper_signals = 0
+    approved_real = approved_paper = 0
+    rejected_real = rejected_paper = 0
     cache_hits = cache_misses = 0
     review_file = data / "review_results.json"
     if review_file.exists():
         try:
             rv = json.loads(review_file.read_text())
-            approved = rv.get("approved", 0)
-            rejected = rv.get("rejected", 0)
+            approved       = rv.get("approved", 0)
+            rejected       = rv.get("rejected", 0)
+            real_signals   = rv.get("real_signals", 0)
+            paper_signals  = rv.get("paper_signals", 0)
+            approved_real  = rv.get("approved_real", 0)
+            approved_paper = rv.get("approved_paper", 0)
+            rejected_real  = rv.get("rejected_real", 0)
+            rejected_paper = rv.get("rejected_paper", 0)
             cs = rv.get("cache_stats", {})
             cache_hits = cs.get("hits", 0)
             cache_misses = cs.get("misses", 0)
@@ -111,8 +120,14 @@ def main():
         "cycle_start": args.cycle_start,
         "cycle_end": now_iso,
         "signals": sig_count,
+        "real_signals": real_signals,
+        "paper_signals": paper_signals,
         "approved": approved,
         "rejected": rejected,
+        "approved_real": approved_real,
+        "approved_paper": approved_paper,
+        "rejected_real": rejected_real,
+        "rejected_paper": rejected_paper,
         "llm_calls": llm_calls,
         "cache_hits": cache_hits,
         "cache_misses": cache_misses,
@@ -140,7 +155,9 @@ def main():
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     # ── print summary ────────────────────────────────────────────────
-    print(f"[Cycle {args.cycle}] signals={sig_count} approved={approved} rejected={rejected} "
+    print(f"[Cycle {args.cycle}] signals={sig_count}(real={real_signals} paper={paper_signals}) "
+          f"approved={approved}(real={approved_real} paper={approved_paper}) "
+          f"rejected={rejected}(real={rejected_real} paper={rejected_paper}) "
           f"llm_calls={llm_calls}(cache_hit={cache_hits}) "
           f"tokens~{estimated_total_tokens} "
           f"fallback={fallback_count} retry={retry_count} "

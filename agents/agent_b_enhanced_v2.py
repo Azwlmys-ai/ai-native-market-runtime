@@ -381,8 +381,11 @@ class AgentBEnhancedV2:
                     'reason': f'高价 YES 顺势策略，价格 {yes_price:.3f}，EV {ev:.2f}%'
                 })
         
+        for s in signals:
+            s.setdefault("source", "real")
+            s.setdefault("synthetic", False)
         return signals
-    
+
     def filter_signals(self, signals):
         """过滤信号"""
         # 按 EV 和置信度排序

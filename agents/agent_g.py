@@ -43,8 +43,161 @@ class AgentG:
             self.log(f"⚠️  加载配置失败: {e}")
             return {}
     
+    def _is_dry_run_mode(self) -> bool:
+        """检测是否为 dry-run 模式"""
+        import os
+        pm_trader = os.environ.get("PM_TRADER_PATH", "")
+        if "mock" in pm_trader.lower():
+            return True
+        return os.environ.get("EXECUTOR_DRY_RUN", "0") == "1"
+
+    def _generate_mock_trade_history(self) -> list:
+        """在 dry-run 模式下生成合成交易历史，供学习循环使用。
+
+        所有数据明确标记 synthetic=True、dry_run=True，绝不产生真实交易。
+        """
+        self.log("🔧 [DRY-RUN] 生成合成交易历史...")
+        mock_trades = [
+            {
+                "trade_id": "mock-dryrun-001",
+                "market_slug": "will-btc-hit-150k-by-2026-05-01",
+                "side": "buy",
+                "amount_usd": 50.0,
+                "price": 0.12,
+                "direction": "YES",
+                "outcome": "open",
+                "pnl": 0.0,
+                "timestamp": (datetime.now() - timedelta(hours=4)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-002",
+                "market_slug": "will-btc-hit-150k-by-2026-05-01",
+                "side": "sell",
+                "amount_usd": 50.0,
+                "price": 0.38,
+                "direction": "YES",
+                "outcome": "closed",
+                "pnl": 13.0,
+                "timestamp": (datetime.now() - timedelta(hours=2)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-003",
+                "market_slug": "will-nba-champion-be-celtics-2026",
+                "side": "buy",
+                "amount_usd": 100.0,
+                "price": 0.45,
+                "direction": "YES",
+                "outcome": "open",
+                "pnl": 0.0,
+                "timestamp": (datetime.now() - timedelta(hours=3)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-004",
+                "market_slug": "will-nba-champion-be-celtics-2026",
+                "side": "sell",
+                "amount_usd": 100.0,
+                "price": 0.62,
+                "direction": "YES",
+                "outcome": "closed",
+                "pnl": 17.0,
+                "timestamp": (datetime.now() - timedelta(hours=1)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-005",
+                "market_slug": "fed-cut-rates-june-2026",
+                "side": "buy",
+                "amount_usd": 75.0,
+                "price": 0.28,
+                "direction": "YES",
+                "outcome": "open",
+                "pnl": 0.0,
+                "timestamp": (datetime.now() - timedelta(hours=5)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-006",
+                "market_slug": "fed-cut-rates-june-2026",
+                "side": "sell",
+                "amount_usd": 60.0,
+                "price": 0.18,
+                "direction": "YES",
+                "outcome": "closed",
+                "pnl": -7.5,
+                "timestamp": (datetime.now() - timedelta(hours=1, minutes=30)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-007",
+                "market_slug": "trump-tariff-announce-may-2026",
+                "side": "buy",
+                "amount_usd": 40.0,
+                "price": 0.55,
+                "direction": "NO",
+                "outcome": "open",
+                "pnl": 0.0,
+                "timestamp": (datetime.now() - timedelta(hours=2, minutes=30)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-008",
+                "market_slug": "trump-tariff-announce-may-2026",
+                "side": "sell",
+                "amount_usd": 40.0,
+                "price": 0.70,
+                "direction": "NO",
+                "outcome": "closed",
+                "pnl": -6.0,
+                "timestamp": (datetime.now() - timedelta(hours=1, minutes=15)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-009",
+                "market_slug": "nhl-stanley-cup-oilers-2026",
+                "side": "buy",
+                "amount_usd": 30.0,
+                "price": 0.08,
+                "direction": "YES",
+                "outcome": "open",
+                "pnl": 0.0,
+                "timestamp": (datetime.now() - timedelta(hours=1, minutes=45)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+            {
+                "trade_id": "mock-dryrun-010",
+                "market_slug": "nhl-stanley-cup-oilers-2026",
+                "side": "sell",
+                "amount_usd": 30.0,
+                "price": 0.04,
+                "direction": "YES",
+                "outcome": "closed",
+                "pnl": -1.2,
+                "timestamp": (datetime.now() - timedelta(minutes=45)).isoformat(),
+                "synthetic": True,
+                "dry_run": True,
+            },
+        ]
+        return mock_trades
+
     def load_trade_history(self):
-        """加载交易历史"""
+        """加载交易历史。dry-run 模式下使用合成数据。"""
+        if self._is_dry_run_mode():
+            trades = self._generate_mock_trade_history()
+            self.log(f"📊 [DRY-RUN] 加载了 {len(trades)} 笔合成交易历史")
+            return trades
+
         try:
             result = subprocess.run(
                 [get_pm_trader(), "history", "--limit", "50"],
@@ -95,14 +248,12 @@ class AgentG:
         
         self.log("分析交易表现...")
         
-        # 统计数据
         buy_trades = [t for t in trades if t.get("side") == "buy"]
         sell_trades = [t for t in trades if t.get("side") == "sell"]
         
         total_buy_amount = sum(t.get("amount_usd", 0) for t in buy_trades)
         total_sell_amount = sum(t.get("amount_usd", 0) for t in sell_trades)
         
-        # 按市场分组
         markets = {}
         for trade in trades:
             market = trade.get("market_slug", "unknown")
@@ -110,7 +261,6 @@ class AgentG:
                 markets[market] = []
             markets[market].append(trade)
         
-        # 构建分析提示词
         prompt = f"""你是 Polymarket 交易系统的复盘分析师。请分析以下交易数据，找出成功和失败的模式。
 
 ## 交易统计
@@ -155,7 +305,6 @@ class AgentG:
                 max_tokens=2000
             )
             
-            # 解析 JSON
             import re
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
@@ -178,13 +327,11 @@ class AgentG:
         
         self.log("分析拒绝信号...")
         
-        # 统计拒绝原因
         rejection_reasons = {}
         for signal_data in rejected_signals:
             reviews = signal_data.get("reviews", [])
             for review in reviews:
                 reason = review.get("explanation", "未知原因")
-                # 提取关键词
                 if "数据不足" in reason or "数据来源" in reason:
                     key = "数据质量问题"
                 elif "逻辑" in reason or "相关性" in reason:
@@ -237,7 +384,6 @@ class AgentG:
                 max_tokens=4000
             )
             
-            # 解析 JSON
             import re
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
@@ -266,7 +412,6 @@ class AgentG:
         
         self.log(f"✅ 已保存学习报告到 {output_file}")
         
-        # 追加到历史记录
         history_file = self.data_dir / "learning_history.json"
         history = []
         if history_file.exists():
@@ -275,12 +420,11 @@ class AgentG:
                     history = json.load(f)
                 if not isinstance(history, list):
                     history = []
-            except:
+            except Exception:
                 history = []
         
         history.append(report)
         
-        # 只保留最近 30 天的记录
         cutoff = datetime.now() - timedelta(days=30)
         history = [
             h for h in history
@@ -291,41 +435,88 @@ class AgentG:
             json.dump(history, f, indent=2, ensure_ascii=False)
         
         self.log(f"✅ 已更新学习历史（保留 {len(history)} 条记录）")
+        
+        # P0: 同时更新 learning_knowledge_base.json（Agent M / Agent P / Strategy Manager 读取）
+        self._save_learning_knowledge_base(rejection_analysis)
+    
+    def _save_learning_knowledge_base(self, rejection_analysis):
+        """P0 修复：将 Agent G 的复盘洞察写入 learning_knowledge_base.json
+        下游 Agent M 在信号审查时读取 rejection_prompt_enhancement 注入 prompt。"""
+        kb_file = self.data_dir / "learning_knowledge_base.json"
+        
+        # 加载已有知识库（如果存在）
+        kb = {}
+        if kb_file.exists():
+            try:
+                with open(kb_file, 'r') as f:
+                    kb = json.load(f)
+            except Exception:
+                kb = {}
+        
+        # 从 rejection_analysis 提炼增强 prompt
+        if rejection_analysis:
+            common_mistakes = rejection_analysis.get("common_mistakes", [])
+            unreliable = rejection_analysis.get("unreliable_sources", [])
+            suggestions = rejection_analysis.get("improvement_suggestions", [])
+            insights = rejection_analysis.get("key_insights", "")
+            
+            enhancement_parts = []
+            enhancement_parts.append("\n## 🔄 决策层复盘发现（来自 Agent G 最新一轮）\n")
+            if common_mistakes:
+                enhancement_parts.append("**决策层常犯错误**：")
+                enhancement_parts.extend([f"- {m}" for m in common_mistakes[:5]])
+            if unreliable:
+                enhancement_parts.append("\n**不可靠数据源**：")
+                enhancement_parts.extend([f"- {s}" for s in unreliable[:5]])
+            if suggestions:
+                enhancement_parts.append("\n**改进建议**：")
+                enhancement_parts.extend([f"- {s}" for s in suggestions[:5]])
+            if insights:
+                enhancement_parts.append(f"\n**核心洞察**：{insights}")
+            
+            enhancement_parts.append("\n**⚠️ 提示**：审查信号时，请结合以上复盘发现进行判断。")
+            
+            kb["rejection_prompt_enhancement"] = "\n".join(enhancement_parts)
+        
+        kb["last_updated"] = datetime.now().isoformat()
+        kb["source"] = "agent_g_post_mortem"
+        
+        with open(kb_file, 'w') as f:
+            json.dump(kb, f, indent=2, ensure_ascii=False)
+        
+        self.log(f"✅ 已更新 learning_knowledge_base.json → rejection_prompt_enhancement")
     
     def run(self):
         """执行复盘分析"""
         self.log("开始交易复盘...")
         
-        # 加载数据
         trades = self.load_trade_history()
         rejected_signals = self.load_rejected_signals()
         
-        # 检查是否有足够数据
-        if len(trades) < 10:
-            self.log(f"ℹ️  交易数据不足（{len(trades)} 笔），需要至少 10 笔")
-            return
+        min_trades = 5 if self._is_dry_run_mode() else 10
+        min_rejections = 1 if self._is_dry_run_mode() else 3
         
-        if len(rejected_signals) < 3:
-            self.log(f"ℹ️  拒绝信号数据不足（{len(rejected_signals)} 个），需要至少 3 个")
-            return
+        trade_analysis = None
+        rejection_analysis = None
         
-        # 分析交易（使用更快的模型）
-        try:
-            self.log("分析交易表现（使用 gpt-5.4-mini）...")
-            trade_analysis = self.analyze_trades(trades)
-        except Exception as e:
-            self.log(f"⚠️  交易分析跳过: {e}")
-            trade_analysis = None
+        if len(trades) < min_trades:
+            self.log(f"ℹ️  交易数据不足（{len(trades)}/{min_trades} 笔），跳过交易分析")
+        else:
+            try:
+                self.log("分析交易表现...")
+                trade_analysis = self.analyze_trades(trades)
+            except Exception as e:
+                self.log(f"⚠️  交易分析跳过: {e}")
         
-        # 分析拒绝信号（使用更快的模型）
-        try:
-            self.log("分析拒绝信号（使用 gpt-5.4-mini）...")
-            rejection_analysis = self.analyze_rejections(rejected_signals)
-        except Exception as e:
-            self.log(f"⚠️  拒绝信号分析跳过: {e}")
-            rejection_analysis = None
+        if len(rejected_signals) < min_rejections:
+            self.log(f"ℹ️  拒绝信号数据不足（{len(rejected_signals)}/{min_rejections} 个），跳过拒绝分析")
+        else:
+            try:
+                self.log("分析拒绝信号...")
+                rejection_analysis = self.analyze_rejections(rejected_signals)
+            except Exception as e:
+                self.log(f"⚠️  拒绝信号分析跳过: {e}")
         
-        # 保存报告
         if trade_analysis or rejection_analysis:
             self.save_learning_report(trade_analysis, rejection_analysis)
             self.log("✅ 复盘完成")

@@ -94,8 +94,12 @@ class Orchestrator:
             # 步骤 12.5：汇总各 agent 信号到 signals.json
             self._consolidate_signals_for_review()
 
+            # 步骤 12.6：定量风险引擎（P0 Risk Engine）
+            self.log("步骤 12.6/17: 定量风险引擎 (RiskEngine)")
+            self._run_risk_engine()
+
             # 第 13 步：风险审查（Agent M）
-            self.log("步骤 13/16: 风险审查 (Agent M)")
+            self.log("步骤 13/17: 风险审查 (Agent M)")
             signals_ready, skip_reason = self._signals_ready_for_review()
             if signals_ready:
                 self._run_agent("agent_m")
@@ -138,6 +142,16 @@ class Orchestrator:
         if not positions_file.exists():
             with open(positions_file, "w") as f:
                 json.dump([], f, indent=2, ensure_ascii=False)
+
+    def _run_risk_engine(self):
+        """P0: 运行定量风险引擎，生成 data/risk_snapshot.json"""
+        try:
+            from risk.risk_engine import RiskEngine
+            engine = RiskEngine(self.base_dir)
+            output = engine.run()
+            self.log(f"✅ RiskEngine 快照已生成: {output}")
+        except Exception as e:
+            self.log(f"⚠️  RiskEngine 执行失败（不中断流水线）: {e}")
 
     def _signal_max_age_seconds(self):
         raw_value = os.environ.get("SIGNAL_MAX_AGE_SECONDS", str(SIGNAL_MAX_AGE_SECONDS))

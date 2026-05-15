@@ -196,6 +196,38 @@ class AgentM:
             except Exception:
                 pass
         
+        # P0: 加载 risk_snapshot.json（定量风险层）
+        risk_summary = ""
+        risk_file = self.base_dir / "data" / "risk_snapshot.json"
+        if risk_file.exists():
+            try:
+                with open(risk_file, 'r') as f:
+                    risk_data = json.load(f)
+                # 精简摘要，不超过 800 字符
+                summary_parts = []
+                summary_parts.append("\n## 📊 当前风险环境（RiskEngine 快照）\n")
+                summary_parts.append(f"- 数据可用: {risk_data.get('data_available', False)}")
+                summary_parts.append(f"- 资产数量: {risk_data.get('asset_count', 0)}")
+                exposures = risk_data.get("exposure", {})
+                violations = exposures.get("violations", [])
+                if violations:
+                    summary_parts.append("- ⚠️ 风险敞口违规:")
+                    for v in violations[:3]:
+                        summary_parts.append(f"  * {v.get('asset','?')}: {v.get('value','?')} (上限 {v.get('limit','?')})")
+                else:
+                    summary_parts.append("- ✅ 无风险敞口违规")
+                var_data = risk_data.get("var", {})
+                if var_data.get("VaR_95_daily") is not None:
+                    summary_parts.append(f"- VaR 95% (日): {var_data.get('VaR_95_daily', 'N/A')}")
+                    summary_parts.append(f"- VaR 标签: {var_data.get('label', 'N/A')}")
+                corr_count = len(risk_data.get("correlations", []))
+                summary_parts.append(f"- 高相关性资产对: {corr_count}")
+                # 压缩到 800 字符
+                raw = "\n".join(summary_parts)
+                risk_summary = raw[:800]
+            except Exception:
+                pass
+        
         prompt = f"""
 你是风险审查员，需要客观评估这个交易信号的质量。
 
@@ -241,6 +273,8 @@ class AgentM:
 {'3. 重点验证：对冲方向互补性、价差优势（现货价差 > 5% 或资金费率年化 > 50%）、数据完整性（必须有 OKX 价格）' if is_arbitrage else ''}
 {'4. 风险点：基差风险、流动性风险、保证金风险' if is_arbitrage else ''}
 {'5. 如果数据完整且对冲逻辑合理，应倾向于 APPROVE' if is_arbitrage else ''}
+
+{risk_summary}
 
 {learning_enhancement}
 
@@ -341,19 +375,38 @@ class AgentM:
         # 分类结果
         approved = []
         rejected = []
-        
+
         for result in results:
             if result["decision"] == "APPROVE":
                 approved.append(result)
             else:
                 rejected.append(result)
-        
+
+        def _is_paper(sig: dict) -> bool:
+            return sig.get("paper", False) or str(sig.get("source", "")).startswith("paper")
+
+        approved_real  = [r for r in approved if not _is_paper(r["signal"])]
+        approved_paper = [r for r in approved if     _is_paper(r["signal"])]
+        rejected_real  = [r for r in rejected if not _is_paper(r["signal"])]
+        rejected_paper = [r for r in rejected if     _is_paper(r["signal"])]
+        real_total     = sum(1 for s in signals if not _is_paper(s))
+        paper_total    = sum(1 for s in signals if     _is_paper(s))
+
+        self.log(f"  [real]  通过 {len(approved_real)}, 拒绝 {len(rejected_real)}")
+        self.log(f"  [paper] 通过 {len(approved_paper)}, 拒绝 {len(rejected_paper)}")
+
         # 保存审查结果
         output = {
             "timestamp": datetime.now().isoformat(),
             "total": len(signals),
+            "real_signals": real_total,
+            "paper_signals": paper_total,
             "approved": len(approved),
             "rejected": len(rejected),
+            "approved_real": len(approved_real),
+            "approved_paper": len(approved_paper),
+            "rejected_real": len(rejected_real),
+            "rejected_paper": len(rejected_paper),
             "approved_signals": approved,
             "rejected_signals": rejected,
             "cache_stats": {

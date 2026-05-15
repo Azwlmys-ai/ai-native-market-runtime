@@ -38,6 +38,7 @@ def main():
         ],
         "source": "paper_smoke",
         "paper": True,
+        "synthetic": True,
     }
     stamped = ensure_signal_timestamps([signal], generated_at=datetime.now().isoformat())
     output_file = data_dir / "signals.json"

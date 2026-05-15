@@ -35,7 +35,22 @@
       "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage init)",
       "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage status --short)",
       "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage check-ignore -v config/llm_config.json logs data backups)",
-      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage add .)"
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage add .)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage restore --staged \".claude/settings.json.bak.stage4.20260512_160830\" \".claude/settings.local.json.bak.stage3.20260512_160417\")",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage rm --cached \".claude/settings.json.bak.stage4.20260512_160830\" \".claude/settings.local.json.bak.stage3.20260512_160417\")",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage add .gitignore)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage check-ignore -v config/llm_config.json logs data backups .claude/settings.json.bak.stage4.20260512_160830 .claude/settings.local.json.bak.stage3.20260512_160417)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage check-ignore -v \".claude/settings.json.bak.stage4.20260512_160830\" \".claude/settings.local.json.bak.stage3.20260512_160417\")",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage commit -m ' *)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage log --oneline -1)",
+      "Bash(git -C /Users/libo/.hermes/polymarket_arbitrage branch)",
+      "Bash(python3 -)",
+      "Bash(TOTAL_CYCLES=1 INTERVAL_SECS=0 bash scripts/monitor_2h.sh)",
+      "Bash(EXECUTOR_DRY_RUN=1 PM_TRADER_PATH=/tmp/mock_pm_trader.sh PYTHONPATH=/Users/libo/.hermes/polymarket_arbitrage python3 main.py --mode once)",
+      "Bash(python3 -m pytest tests/test_smoke.py -v --tb=short)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(echo \"PID=$!\")",
+      "Bash(ps -p 8848 -o pid,stat,etime,command)"
     ],
     "additionalDirectories": [
       "/Users/libo/.hermes/polymarket_arbitrage",
