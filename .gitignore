@@ -8,6 +8,7 @@ data/
 backups/
 
 # Python
+pycache/
 __pycache__/
 *.pyc
 *.pyo
@@ -26,6 +27,7 @@ build/
 venv/
 
 # Claude Code local / backup settings (machine-specific paths)
+.claude/
 .claude/settings.local.json
 .claude/*.bak*
 
@@ -36,6 +38,9 @@ venv/
 .pytest_cache/
 
 # Dead backup / disabled files
+*.bak
+*.bak_*
+*backup*
 *.backup
 *.disabled
 
