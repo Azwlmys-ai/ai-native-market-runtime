@@ -19,6 +19,9 @@ except Exception as e:
     call_llm = None
     _LLM_IMPORT_ERROR = e
 
+LLM_TIMEOUT_SECONDS = 20
+PM_HISTORY_TIMEOUT_SECONDS = 20
+
 class AgentG:
     def __init__(self, base_dir=None):
         self.base_dir = Path(base_dir) if base_dir else get_base_dir()
@@ -208,7 +211,7 @@ class AgentG:
                 [get_pm_trader(), "history", "--limit", "50"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=PM_HISTORY_TIMEOUT_SECONDS,
                 env=get_pm_trader_env()
             )
             
@@ -267,6 +270,14 @@ class AgentG:
             markets[market].append(trade)
         
         trade_stats = self._build_trade_stats(trades)
+
+        if trade_stats["dry_run"] or trade_stats["synthetic"]:
+            self.log("🔧 [DRY-RUN] 跳过 LLM 交易分析，使用 deterministic fallback")
+            return self._fallback_trade_analysis(
+                trades,
+                trade_stats,
+                "dry_run_deterministic_fallback",
+            )
         
         prompt = f"""你是 Polymarket 交易系统的复盘分析师。请分析以下交易数据，找出成功和失败的模式。
 
@@ -311,7 +322,8 @@ class AgentG:
                 prompt=prompt,
                 model="gpt-5.4-mini",
                 temperature=0.3,
-                max_tokens=2000
+                max_tokens=2000,
+                timeout=LLM_TIMEOUT_SECONDS,
             )
             
             import re
@@ -464,6 +476,14 @@ class AgentG:
                     key = "其他"
                 
                 rejection_reasons[key] = rejection_reasons.get(key, 0) + 1
+
+        if self._is_dry_run_mode():
+            self.log("🔧 [DRY-RUN] 跳过 LLM 拒绝分析，使用 deterministic fallback")
+            return self._fallback_rejection_analysis(
+                rejected_signals,
+                rejection_reasons,
+                "dry_run_deterministic_fallback",
+            )
         
         prompt = f"""你是 Polymarket 交易系统的风险审查分析师。请分析以下被拒绝的信号，找出决策层的系统性问题。
 
@@ -501,7 +521,8 @@ class AgentG:
                 prompt=prompt,
                 model="deepseek-r1",
                 temperature=0.3,
-                max_tokens=4000
+                max_tokens=4000,
+                timeout=LLM_TIMEOUT_SECONDS,
             )
             
             import re
