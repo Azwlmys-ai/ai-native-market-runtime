@@ -6,12 +6,17 @@
 
 import json
 import requests
+import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from _paths import get_base_dir
+
 class TencentStocksCollector:
-    def __init__(self, base_dir="/opt/data/polymarket_arbitrage"):
-        self.base_dir = Path(base_dir)
+    def __init__(self, base_dir=None):
+        self.base_dir = Path(base_dir) if base_dir else get_base_dir()
         self.data_dir = self.base_dir / "data"
         self.logs_dir = self.base_dir / "logs"
         

@@ -24,6 +24,15 @@ FINNHUB_TIMEOUT = 15
 POLYGON_TIMEOUT = 20   # reduced from 60 so it cannot dominate the total budget
 
 
+def _has_stock_rows(data) -> bool:
+    return bool(
+        isinstance(data, dict)
+        and data.get("status") == "success"
+        and data.get("total_symbols", 0) > 0
+        and data.get("stocks")
+    )
+
+
 async def _fetch_sources():
     """并发采集两个数据源；各自有独立超时；异常返回 None 而不向上抛。"""
     finnhub_task = asyncio.wait_for(collect_finnhub_data(), timeout=FINNHUB_TIMEOUT)
@@ -36,7 +45,7 @@ async def _fetch_sources():
     finnhub_data = None
     if isinstance(finnhub_raw, Exception):
         print(f"❌ Finnhub 数据采集失败: {finnhub_raw}")
-    elif isinstance(finnhub_raw, dict) and finnhub_raw.get("status") == "success":
+    elif _has_stock_rows(finnhub_raw):
         finnhub_data = finnhub_raw
         print(f"✅ Finnhub 数据: {finnhub_raw.get('total_symbols', '?')} 个股票")
     else:
@@ -45,7 +54,7 @@ async def _fetch_sources():
     polygon_data = None
     if isinstance(polygon_raw, Exception):
         print(f"❌ Polygon 数据采集失败: {polygon_raw}")
-    elif isinstance(polygon_raw, dict) and polygon_raw.get("status") == "success":
+    elif _has_stock_rows(polygon_raw):
         polygon_data = polygon_raw
         print(f"✅ Polygon 数据: {polygon_raw.get('total_symbols', '?')} 个股票（备用）")
     else:
@@ -72,7 +81,13 @@ async def update_latest_data():
             with open(cache_file, "r", encoding="utf-8") as f:
                 cache = json.load(f)
             cache_time = datetime.fromisoformat(cache.get("timestamp", ""))
-            if (datetime.now() - cache_time).total_seconds() < 1800:  # 30分钟缓存
+            if (
+                (datetime.now() - cache_time).total_seconds() < 1800
+                and (
+                    len(cache.get("stocks") or []) > 0
+                    or len((cache.get("polygon_backup") or {}).get("stocks") or []) > 0
+                )
+            ):  # 30分钟缓存
                 print("使用缓存的美股数据")
                 existing_latest = {}
                 if latest_data_path.exists():
@@ -138,7 +153,16 @@ async def update_latest_data():
             "total_symbols": finnhub_data["total_symbols"],
             "timestamp": finnhub_data["timestamp"],
         }
-    if polygon_data:
+    elif polygon_data:
+        us_stocks = {
+            "source": "polygon",
+            "stocks": polygon_data["stocks"],
+            "total_symbols": polygon_data["total_symbols"],
+            "timestamp": polygon_data["timestamp"],
+            "note": polygon_data.get("note", "polygon backup used as primary"),
+        }
+
+    if polygon_data and finnhub_data:
         us_stocks["polygon_backup"] = {
             "stocks": polygon_data["stocks"],
             "total_symbols": polygon_data["total_symbols"],

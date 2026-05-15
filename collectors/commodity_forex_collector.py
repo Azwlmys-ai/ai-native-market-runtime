@@ -8,14 +8,22 @@
 """
 
 import json
+import csv
+import io
 import requests
+import sys
 from pathlib import Path
 from datetime import datetime
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from _paths import get_base_dir
+
 class CommodityForexCollector:
-    def __init__(self, base_dir="/opt/data/polymarket_arbitrage"):
-        self.base_dir = Path(base_dir)
+    def __init__(self, base_dir=None):
+        self.base_dir = Path(base_dir) if base_dir else get_base_dir()
         self.data_dir = self.base_dir / "data"
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         
         # ExchangeRate API（免费，无需 API Key）
         self.exchange_api_base = "https://api.exchangerate-api.com/v4/latest"
@@ -83,6 +91,52 @@ class CommodityForexCollector:
                 self.log(f"❌ {name}: {e}")
         
         return commodities
+
+    def fetch_commodities_stooq(self):
+        """从 Stooq 获取商品/金属报价，作为 Yahoo 403 时的轻量真实数据源。"""
+        commodities = {}
+        stooq_symbols = {
+            'gold': 'xauusd',
+            'silver': 'xagusd',
+            'oil_wti': 'cl.f',
+            'natural_gas': 'ng.f',
+            'copper': 'hg.f',
+        }
+
+        for name, symbol in stooq_symbols.items():
+            try:
+                url = "https://stooq.com/q/l/"
+                params = {"s": symbol, "f": "sd2t2ohlcv", "h": "", "e": "csv"}
+                response = requests.get(url, params=params, timeout=10)
+                if response.status_code != 200:
+                    self.log(f"❌ {name} Stooq: HTTP {response.status_code}")
+                    continue
+
+                rows = list(csv.DictReader(io.StringIO(response.text)))
+                if not rows:
+                    self.log(f"⚠️ {name} Stooq: 空响应")
+                    continue
+
+                row = rows[0]
+                close = row.get("Close")
+                if not close or close == "N/D":
+                    self.log(f"⚠️ {name} Stooq: 无价格数据")
+                    continue
+
+                price = float(close)
+                commodities[name] = {
+                    'price': round(price, 4),
+                    'currency': 'USD',
+                    'symbol': symbol,
+                    'source': 'Stooq',
+                    'date': row.get("Date"),
+                    'time': row.get("Time"),
+                }
+                self.log(f"✅ {name} Stooq: ${price:.4f}")
+            except Exception as e:
+                self.log(f"❌ {name} Stooq: {e}")
+
+        return commodities
     
     def fetch_forex_rates(self):
         """从 ExchangeRate API 获取汇率数据"""
@@ -135,6 +189,9 @@ class CommodityForexCollector:
         # 采集大宗商品
         self.log("📊 采集大宗商品数据（Yahoo Finance）")
         commodities = self.fetch_commodities_yahoo()
+        if not commodities:
+            self.log("📊 Yahoo Finance 无可用商品数据，切换 Stooq")
+            commodities = self.fetch_commodities_stooq()
         
         # 采集汇率
         self.log("📊 采集汇率数据（ExchangeRate API）")

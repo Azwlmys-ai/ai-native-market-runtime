@@ -8,12 +8,17 @@ Alpha Vantage 数据采集器
 import json
 import requests
 import time
+import sys
 from pathlib import Path
 from datetime import datetime
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from _paths import get_base_dir
+
 class AlphaVantageCollector:
-    def __init__(self, base_dir="/opt/data/polymarket_arbitrage"):
-        self.base_dir = Path(base_dir)
+    def __init__(self, base_dir=None):
+        self.base_dir = Path(base_dir) if base_dir else get_base_dir()
         self.data_dir = self.base_dir / "data"
         self.config_file = self.base_dir / "config" / "broker_config.json"
         

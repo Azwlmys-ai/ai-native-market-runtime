@@ -13,13 +13,18 @@ import json
 import time
 import requests
 import subprocess
+import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import defaultdict
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from _paths import get_base_dir
+
 class HistoricalDataCollector:
-    def __init__(self, base_dir="/opt/data/polymarket_arbitrage"):
-        self.base_dir = Path(base_dir)
+    def __init__(self, base_dir=None):
+        self.base_dir = Path(base_dir) if base_dir else get_base_dir()
         self.data_dir = self.base_dir / "data" / "historical"
         self.logs_dir = self.base_dir / "logs"
         self.data_dir.mkdir(parents=True, exist_ok=True)

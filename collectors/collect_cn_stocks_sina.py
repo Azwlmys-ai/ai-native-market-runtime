@@ -6,7 +6,13 @@ A股历史数据采集（新浪财经 API）
 
 import json
 import requests
+import sys
+from pathlib import Path
 from datetime import datetime
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from _paths import get_base_dir
 
 def collect_cn_stocks():
     """采集 A股 5 月数据（新浪财经）"""
@@ -70,7 +76,8 @@ def collect_cn_stocks():
             print(f"❌ {type(e).__name__}: {str(e)[:50]}")
     
     # 保存数据
-    output_path = '/opt/data/polymarket_arbitrage/data/historical/cn_stocks_may_2026.json'
+    output_path = get_base_dir() / "data" / "historical" / "cn_stocks_may_2026.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(all_data, f, ensure_ascii=False, indent=2)
     

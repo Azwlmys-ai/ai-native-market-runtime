@@ -7,6 +7,7 @@ import json
 import asyncio
 import aiohttp
 import sys
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -150,11 +151,9 @@ class AgentA:
         self.log("采集 OKX 完整数据...")
         
         try:
-            import subprocess
-            
             okx_collector = self.base_dir / "collectors" / "okx_collector.py"
             result = subprocess.run(
-                ["python3", str(okx_collector)],
+                [sys.executable, str(okx_collector)],
                 cwd=str(self.base_dir),
                 capture_output=True,
                 text=True,

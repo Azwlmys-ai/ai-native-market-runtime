@@ -5,6 +5,7 @@ Orchestrator - Multi-Agent 系统调度器
 
 import json
 import os
+import sys
 import time
 import asyncio
 from pathlib import Path
@@ -12,6 +13,7 @@ from datetime import datetime
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
 
 SIGNAL_MAX_AGE_SECONDS = 2 * 60 * 60
+PYTHON_BIN = sys.executable
 
 
 class Orchestrator:
@@ -42,6 +44,8 @@ class Orchestrator:
             # 第 0 步：美股数据采集（US Stocks Updater）
             self.log("步骤 0/17: 美股数据采集 (US Stocks)")
             self._run_collector("us_stocks_updater")
+            self.log("步骤 0.5/17: 大宗商品与汇率采集 (Commodity/Forex)")
+            self._run_collector("commodity_forex_collector")
             
             # 第 1 步：数据采集（Agent A）
             self.log("步骤 1/17: 数据采集 (Agent A)")
@@ -325,7 +329,7 @@ class Orchestrator:
         try:
             import subprocess
             result = subprocess.run(
-                ["python3", str(agent_file)],
+                [PYTHON_BIN, str(agent_file)],
                 cwd=str(self.base_dir),
                 capture_output=True,
                 text=True,
@@ -350,7 +354,7 @@ class Orchestrator:
             collector_file = self.base_dir / "collectors" / f"{collector_name}.py"
             if collector_file.exists():
                 result = subprocess.run(
-                    ["python3", str(collector_file)],
+                    [PYTHON_BIN, str(collector_file)],
                     cwd=str(self.base_dir),
                     capture_output=True,
                     text=True,
@@ -377,7 +381,7 @@ class Orchestrator:
             executor_file = self.base_dir / "signal_executor.py"
             if executor_file.exists():
                 result = subprocess.run(
-                    ["python3", str(executor_file)],
+                    [PYTHON_BIN, str(executor_file)],
                     cwd=str(self.base_dir),
                     capture_output=True,
                     text=True,
@@ -402,7 +406,7 @@ class Orchestrator:
             sell_executor_file = self.base_dir / "sell_executor.py"
             if sell_executor_file.exists():
                 result = subprocess.run(
-                    ["python3", str(sell_executor_file)],
+                    [PYTHON_BIN, str(sell_executor_file)],
                     cwd=str(self.base_dir),
                     capture_output=True,
                     text=True,
