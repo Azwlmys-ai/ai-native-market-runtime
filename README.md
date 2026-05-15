@@ -1,98 +1,153 @@
-# Polymarket Multi-Agent 套利系统
+# AI Native Multi-Agent Market Runtime
 
-## 系统状态
+A dry-run-first, non-production runtime for coordinating AI agents across market data collection, signal review, risk snapshots, simulated execution, visualization, and learning feedback.
 
-**账户余额：** $9,722.58 / $10,000（-2.77%）
-- 现金：$7,475.82
-- 持仓价值：$2,246.75
-- 未实现盈亏：-$277.42
+## Screenshots
 
-**持仓概览：** 15 个市场
-- GTA VI 相关：4 个（高相关性风险 ⚠️）
-- NHL 夺冠：10 个
-- 其他：1 个
+Runtime dashboard overview:
 
-## 已部署 Agent
+![Runtime dashboard overview](./docs/images/runtime-dashboard-overview.png)
 
-### 核心架构
-- ✅ **Orchestrator** - 系统调度器
-- ✅ **LLM Helper** - 统一 LLM 调用接口
+Execution runtime view:
 
-### 数据层
-- ✅ **Agent A** - 市场数据采集器（Polymarket、OKX、Google News、FRED）
+![Runtime execution view](./docs/images/runtime-exec-view.png)
 
-### 决策层
-- ✅ **Agent K** - 跨市场套利专员（grok-4-1-fast-reasoning）
+Agent topology:
 
-### 风险审查层
-- ✅ **Agent M** - 双模型风险审查员（gpt-5.4 + deepseek-v3.2）
+![Runtime topology](./docs/images/runtime-topology.png)
 
-### 待实现 Agent
-- ⏳ **Agent B** - 情报研究员
-- ⏳ **Agent D** - 无风险套利审查员
-- ⏳ **Agent E** - BTC 滞后套利监控
-- ⏳ **Agent F** - 跨平台监控
-- ⏳ **Agent G** - 报告汇总员
-- ⏳ **Agent H** - 钱包跟单监控
-- ⏳ **Agent I** - 监控保活
-- ⏳ **Agent J** - 交叉分析员
-- ⏳ **Agent OKX Funding** - OKX 资金费率套利
-- ⏳ **Agent P** - 持仓管理监控
-- ⏳ **Strategy Manager** - 策略管理器
+## Overview
 
-## 配置文件
+**AI Native Multi-Agent Market Runtime** is an event-driven orchestration project for inspecting how multiple AI-assisted agents can coordinate a market workflow in dry-run mode.
 
-- `config/llm_config.json` - LLM 模型配置
-- `config/system_config.json` - 系统配置（风险管理、交易成本、数据源）
+The project focuses on runtime structure rather than trading claims:
 
-## 数据流
+- Multi-Agent Orchestration
+- Runtime Observability
+- Dry-Run Safety
+- Risk Snapshot
+- Learning Bridge
+- Visualization Runtime
+- Event-Driven Pipeline
 
-```
-Agent A（数据采集）
-    ↓
-latest_data.json
-    ↓
-Agent K（跨市场套利）→ signals.json
-    ↓
-Agent M（风险审查）→ review_results.json
-    ↓
-信号执行器（待实现）
-    ↓
-Agent P（持仓管理）→ sell_signals.json
-```
+It is not an automatic profit system, AI crypto trading system, live arbitrage system, high-frequency trading platform, or quant fund.
 
-## 快速启动
+## Runtime Architecture
 
-```bash
-# 单次扫描
-source /opt/data/home/.bashrc
-cd /opt/data/polymarket_arbitrage
-python3 main.py --mode once
-
-# 测试 LLM 连接
-python3 llm_helper.py
-
-# 测试数据采集
-python3 agents/agent_a.py
-
-# 查看账户余额
-/opt/data/home/.local/bin/pm-trader balance
-
-# 查看持仓
-/opt/data/home/.local/bin/pm-trader portfolio
+```text
+market/reference data
+        |
+        v
+collectors and research agents
+        |
+        v
+signal normalization
+        |
+        +--------------------+
+        |                    |
+        v                    v
+risk snapshot         learning knowledge
+        |                    |
+        +---------+----------+
+                  |
+                  v
+           review gate
+                  |
+                  v
+        dry-run execution record
+                  |
+                  v
+          learning bridge
+                  |
+                  v
+        runtime observability
 ```
 
-## 下一步
+The orchestrator coordinates a single runtime cycle across collection, research, signal normalization, lightweight risk context, review, dry-run execution records, learning artifacts, and monitoring outputs.
 
-1. **实现剩余 Agent**（Agent B、D、E、F、G、H、I、J、OKX Funding、P、Strategy Manager）
-2. **实现信号执行器**（读取 review_results.json，调用 pm-trader buy）
-3. **实现持仓管理**（Agent P 监控持仓，生成卖出信号）
-4. **修复定时任务**（更新 cron job 路径）
-5. **处理 GTA VI 相关性风险**（4 个市场过度集中）
+## Visualization Runtime
 
-## 风险提示
+The runtime is designed around inspectable artifacts. Dashboards and topology views can be built from generated reports, logs, and JSON state files without requiring hidden process state.
 
-⚠️ **GTA VI 相关性风险**：当前持仓中有 4 个市场与 GTA VI 发布日期相关，存在过度集中风险。建议：
-- 限制单一锚点事件的总敞口 ≤30%
-- 逐步平仓部分 GTA VI 相关持仓
-- Agent B 已禁用 GTA VI 策略（发布日期不确定）
+The public screenshot paths are reserved for:
+
+- `./docs/images/runtime-dashboard-overview.png`
+- `./docs/images/runtime-exec-view.png`
+- `./docs/images/runtime-topology.png`
+
+## Key Features
+
+- **Multi-Agent Orchestration**: discrete agents are coordinated through a central runtime cycle.
+- **Event-Driven Pipeline**: stages communicate through file-based runtime artifacts.
+- **Runtime Observability**: reports, logs, and state snapshots make the system inspectable.
+- **Dry-Run Safety**: current validation is dry-run only and expects no real execution success.
+- **Risk Snapshot**: a lightweight risk engine generates contextual runtime snapshots.
+- **Learning Bridge**: post-cycle learning artifacts can feed later review context.
+- **Heuristic Fallback**: degraded learning paths can refresh deterministic summaries when LLM access is unavailable.
+- **Visualization Runtime**: screenshot-ready surfaces are documented for runtime overview, execution view, and topology.
+
+## Project Structure
+
+```text
+.
+├── agents/                 # Agent scripts used by the runtime and inactive experiments
+├── collectors/             # Data collection modules
+├── executors/              # Dry-run guarded execution record paths
+├── risk/                   # Lightweight risk snapshot engine
+├── scripts/                # Local validation and monitoring utilities
+├── reports/                # Audit and validation reports
+├── docs/images/            # Public README screenshot assets
+├── orchestrator.py         # Runtime coordinator
+├── main.py                 # Entry point
+├── SYSTEM_ARCHITECTURE.md  # Architecture details
+├── AGENT_PIPELINE.md       # Pipeline and agent status map
+├── DRY_RUN_VALIDATION.md   # Dry-run validation summary
+└── LIMITATIONS.md          # Safety and scope limitations
+```
+
+## Dry-Run Validation
+
+Current validation is limited to controlled dry-run behavior:
+
+- runtime cycle exits successfully in dry-run validation
+- execution results are expected to show `success=0`
+- risk snapshot generation is verified
+- review cache behavior is observed
+- learning artifacts refresh under fallback conditions
+- monitor configuration has been restored to the short dry-run cycle profile
+
+No real trading validation has been completed.
+
+## Limitations
+
+This repository is:
+
+- **dry-run only**
+- **non-production**
+- **not financial advice**
+- **not real trading validated**
+- based on a **lightweight risk engine**
+- using **heuristic fallback** for degraded learning paths
+- **not an institutional quant stack**
+
+It does not provide institutional-grade order management, portfolio construction, execution analytics, market impact modeling, capital controls, audited reconciliation, or proven trading edge.
+
+## Safety Notice
+
+This project is for research, runtime inspection, and dry-run validation only. It should not be used to place live trades or manage real capital.
+
+Nothing in this repository is financial advice. The project makes no profitability claims and does not promise yield, alpha, or trading performance.
+
+## Documentation Links
+
+- [System Architecture](./SYSTEM_ARCHITECTURE.md)
+- [Agent Pipeline](./AGENT_PIPELINE.md)
+- [Dry-Run Validation](./DRY_RUN_VALIDATION.md)
+- [Limitations](./LIMITATIONS.md)
+- [GitHub Release Plan](./reports/github_release_plan.md)
+
+## License / Disclaimer
+
+No license is granted until a license file is added by the repository owner.
+
+All content is provided for research and documentation purposes only. Use at your own risk; do not use this project for live trading without independent engineering, security, legal, financial, and operational review.
