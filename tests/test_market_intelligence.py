@@ -392,3 +392,94 @@ def test_fetch_orderbook_handles_missing_token_id():
     from market_intelligence import fetch_orderbook
     assert fetch_orderbook(None) is None
     assert fetch_orderbook("") is None
+
+
+
+# ---------------- extract_token_id + enrich_market ----------------
+
+def test_extract_token_id_handles_multiple_shapes():
+    from market_intelligence import extract_token_id
+    # Shape 1: clobTokenIds as JSON-encoded string
+    m1 = {"clobTokenIds": '["0xabc","0xdef"]'}
+    assert extract_token_id(m1) == "0xabc"
+    # Shape 2: clobTokenIds as list
+    m2 = {"clobTokenIds": ["0x111", "0x222"]}
+    assert extract_token_id(m2) == "0x111"
+    # Shape 3: tokens array
+    m3 = {"tokens": [{"token_id": "0x333"}, {"token_id": "0x444"}]}
+    assert extract_token_id(m3) == "0x333"
+    # Shape 4: garbage
+    assert extract_token_id({}) is None
+    assert extract_token_id({"clobTokenIds": "not-json"}) is None
+    assert extract_token_id(None) is None
+
+
+def test_enrich_market_calls_fetcher_and_builds_profile(monkeypatch):
+    from market_intelligence import enrich_market
+    fake_book = {
+        "best_bid": 0.42, "best_ask": 0.45,
+        "bids": [{"price": 0.42, "size": 1000}],
+        "asks": [{"price": 0.45, "size": 800}],
+    }
+    calls = []
+    def fake_fetch(token_id):
+        calls.append(token_id)
+        return fake_book
+    market = {
+        "id": "mkt-A",
+        "slug": "btc-100k",
+        "question": "Will Bitcoin hit $100k?",
+        "liquidity": 50000,
+        "end_date": "2099-01-01T00:00:00Z",
+        "clobTokenIds": '["0xtoken1","0xtoken2"]',
+    }
+    profile = enrich_market(market, fetcher=fake_fetch, cache=None, news_text=None)
+    assert calls == ["0xtoken1"]
+    assert profile["best_bid"] == 0.42
+    assert profile["best_ask"] == 0.45
+
+
+def test_enrich_market_uses_cache_when_present(tmp_path, monkeypatch):
+    from market_intelligence import enrich_market, OrderbookCache
+    cache = OrderbookCache(tmp_path / "ob.json", ttl_sec=600)
+    cache.set("0xtoken-cached", {
+        "best_bid": 0.10, "best_ask": 0.12,
+        "bids": [], "asks": [],
+    })
+    fetcher_called = []
+    def fetcher(token_id):
+        fetcher_called.append(token_id)
+        return None
+    market = {
+        "id": "mkt-B", "slug": "x", "question": "x",
+        "clobTokenIds": '["0xtoken-cached"]',
+    }
+    profile = enrich_market(market, fetcher=fetcher, cache=cache, news_text=None)
+    assert fetcher_called == []  # cache hit, no network
+    assert profile["best_bid"] == 0.10
+
+
+def test_enrich_market_no_token_records_missing(monkeypatch):
+    from market_intelligence import enrich_market
+    fetcher_called = []
+    def fetcher(token_id):
+        fetcher_called.append(token_id)
+        return {"best_bid": 0.5, "best_ask": 0.6, "bids": [], "asks": []}
+    market = {"id": "mkt-C", "slug": "x", "question": "x"}
+    profile = enrich_market(market, fetcher=fetcher, cache=None, news_text=None)
+    assert fetcher_called == []  # no token → no fetch attempt
+    assert "orderbook" in profile["missing_fields"]
+    assert profile["best_bid"] is None
+
+
+def test_enrich_market_fetcher_failure_does_not_raise(monkeypatch):
+    from market_intelligence import enrich_market
+    def fetcher(token_id):
+        return None
+    market = {
+        "id": "mkt-D", "slug": "x", "question": "x",
+        "clobTokenIds": ["0xtok"],
+    }
+    profile = enrich_market(market, fetcher=fetcher, cache=None, news_text=None)
+    assert "orderbook" in profile["missing_fields"]
+    assert profile["best_bid"] is None

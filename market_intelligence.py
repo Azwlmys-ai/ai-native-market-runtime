@@ -411,6 +411,62 @@ def build_profile(market, orderbook=None, news_text=None):
     }
 
 
+def extract_token_id(market):
+    """Extract first CLOB token_id from a market dict — supports multiple shapes.
+
+    Returns string token_id or None. Never raises.
+    """
+    if not market:
+        return None
+    raw = market.get("clobTokenIds") or market.get("clob_token_ids")
+    if raw is not None:
+        try:
+            if isinstance(raw, str):
+                parsed = json.loads(raw)
+                if isinstance(parsed, list) and parsed:
+                    return str(parsed[0])
+            elif isinstance(raw, (list, tuple)) and raw:
+                return str(raw[0])
+        except Exception:
+            pass
+    tokens = market.get("tokens")
+    if isinstance(tokens, (list, tuple)) and tokens:
+        first = tokens[0]
+        if isinstance(first, dict):
+            tid = first.get("token_id") or first.get("id")
+            if tid:
+                return str(tid)
+    return None
+
+
+def enrich_market(market, fetcher=None, cache=None, news_text=None):
+    """Fetch orderbook (with cache) and build_profile in one shot.
+
+    Phase 1 contract:
+      - Never raises
+      - cache miss → fetcher() (if provided)
+      - fetcher returns None → orderbook missing → fallback scores
+      - On successful fetch, populates cache
+    """
+    fetcher = fetcher if fetcher is not None else fetch_orderbook
+    token_id = extract_token_id(market or {})
+    orderbook = None
+    if token_id:
+        if cache is not None:
+            orderbook = cache.get(token_id)
+        if orderbook is None:
+            try:
+                orderbook = fetcher(token_id)
+            except Exception:
+                orderbook = None
+            if orderbook is not None and cache is not None:
+                try:
+                    cache.set(token_id, orderbook)
+                except Exception:
+                    pass
+    return build_profile(market or {}, orderbook=orderbook, news_text=news_text)
+
+
 # ---------------- fetch_orderbook (Phase 1: failure-tolerant) ----------------
 
 CLOB_BOOK_URL = "https://clob.polymarket.com/book"
