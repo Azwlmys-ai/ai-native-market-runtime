@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.libo.polymarket-orchestrator-dryrun</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/libo/.hermes/polymarket_arbitrage/scripts/scheduled_orchestrator_dryrun.sh</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>900</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/libo/.hermes/polymarket_arbitrage</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/libo/.hermes/polymarket_arbitrage/logs/launchd_polymarket_orchestrator_dryrun.out</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/libo/.hermes/polymarket_arbitrage/logs/launchd_polymarket_orchestrator_dryrun.err</string>
+</dict>
+</plist>
