@@ -67,7 +67,17 @@ class Orchestrator:
             # 第 2 步：市场状态识别（Regime Detector）
             self.log("步骤 2/16: 市场状态识别 (Regime Detector)")
             self._run_agent("regime_detector")
-            
+
+            # 第 2.5 步：市场情报层（Market Intelligence — Phase 1 Shadow Mode）
+            # 仅产出 data/market_intelligence.json 供观察，不被任何下游消费。
+            # 任何异常被吞掉，绝不影响主流程。
+            try:
+                from market_intelligence import safe_run as _mi_safe_run
+                _mi_result = _mi_safe_run()
+                self.log(f"步骤 2.5/16: 市场情报层 (shadow) — {_mi_result.get('markets_processed', 0)} markets, success={_mi_result.get('success')}")
+            except Exception as _mi_exc:
+                self.log(f"步骤 2.5/16: 市场情报层 (shadow) FAILED but ignored — {_mi_exc}")
+
             # 第 3 步：策略管理（Strategy Manager）
             self.log("步骤 3/16: 策略管理 (Strategy Manager)")
             self._run_agent("strategy_manager")
