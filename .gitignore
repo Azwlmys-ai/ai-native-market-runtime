@@ -47,3 +47,4 @@ venv/
 # Orphan root-level test artifacts
 comprehensive_test_report.json
 load_balancer_test_report.json
+reports/
