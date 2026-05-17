@@ -13,6 +13,7 @@ Market Intelligence Layer (Phase 1 — Shadow Mode)
 """
 
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,38 @@ from _paths import get_base_dir
 
 
 SCHEMA_VERSION = "phase1.0"
+
+
+# Order matters: first match wins. Patterns are compiled lazily once.
+CATEGORY_PATTERNS = [
+    ("breaking_news",  [r"\b(ukraine|russia|israel|hamas|gaza|ceasefire|invasion|war|attack|earthquake|tsunami)\b"]),
+    ("weather",        [r"\b(hurricane|storm|temperature|snow|rainfall|noaa|cyclone|typhoon|tornado)\b"]),
+    ("ai_tech",        [r"\b(openai|gpt[-\s]?[0-9]?|anthropic|claude|grok|gemini|llm|ai\s+model|nvidia|tsmc|chatgpt)\b"]),
+    ("crypto",         [r"\b(bitcoin|btc|ethereum|eth|solana|sol|xrp|ripple|doge|crypto|altcoin|usdt|stablecoin)\b"]),
+    ("politics_macro", [r"\b(fed|fomc|interest rate|rate cut|rate hike|etf|election|president|trump|biden|harris|spx|s&p\s*500)\b"]),
+    ("sports",         [r"\b(nba|nhl|nfl|mlb|premier league|champions league|stanley cup|world cup|playoffs?|super bowl|knights|lakers|celtics|ducks|avalanche)\b"]),
+    ("entertainment",  [r"\b(gta|grammy|oscar|billboard|netflix|album|rihanna|drake|taylor swift|movie|tv show|emmy|disney)\b"]),
+    ("politics_other", [r"\b(senate|congress|governor|mayor|cabinet|impeach|parliament|prime minister)\b"]),
+]
+_COMPILED_CATEGORY_PATTERNS = [
+    (cat, [re.compile(p, re.IGNORECASE) for p in patterns])
+    for cat, patterns in CATEGORY_PATTERNS
+]
+
+
+def classify_category(question: str) -> str:
+    """Classify a market question into one of the known categories.
+
+    Returns "other" if no pattern matches. Pure function, no side effects.
+    """
+    if not question:
+        return "other"
+    text = str(question)
+    for category, regexes in _COMPILED_CATEGORY_PATTERNS:
+        for rx in regexes:
+            if rx.search(text):
+                return category
+    return "other"
 
 
 class MarketIntelligence:
