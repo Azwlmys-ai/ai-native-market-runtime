@@ -286,6 +286,129 @@ def tradability_score(scores):
     return max(0.0, min(100.0, total))
 
 
+# ---------------- shadow tier defaults (Phase 1 only — NOT consumed yet) ----------------
+# 这些值在 Phase 1 仅写入 profile 用于观察，没有任何下游消费。
+TIER_DEFAULTS = {
+    "S": {"capital_weight": 1.00, "stop_loss": -0.10, "take_profit": 0.15},
+    "A": {"capital_weight": 0.70, "stop_loss": -0.08, "take_profit": 0.12},
+    "B": {"capital_weight": 0.40, "stop_loss": -0.06, "take_profit": 0.10},
+    "C": {"capital_weight": 0.20, "stop_loss": -0.05, "take_profit": 0.08},
+    "D": {"capital_weight": 0.00, "stop_loss": -0.04, "take_profit": 0.06},
+}
+
+
+def _safe_float(v):
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _depth_within_pct(orders, ref_price, pct=0.01):
+    """Sum size*price within ±pct of ref_price."""
+    if not orders or ref_price is None:
+        return None
+    try:
+        ref = float(ref_price)
+        threshold = ref * pct
+        total = 0.0
+        for o in orders:
+            price = _safe_float(o.get("price"))
+            size  = _safe_float(o.get("size"))
+            if price is None or size is None:
+                continue
+            if abs(price - ref) <= threshold:
+                total += price * size
+        return total
+    except Exception:
+        return None
+
+
+def build_profile(market, orderbook=None, news_text=None):
+    """Build a single market intelligence profile.
+
+    Phase 1 contract:
+      - Pure function, no I/O, no network
+      - Never raises on garbage input — uses fallbacks for everything
+      - Output is ONLY for observation; not consumed by any downstream module
+      - shadow_* fields are tier defaults (Phase 2/3 will use them)
+    """
+    m = market or {}
+    question = m.get("question") or ""
+    slug     = m.get("slug")     or ""
+    mid      = m.get("id")
+
+    missing = []
+
+    # ---- raw fields ----
+    liquidity_usd = _safe_float(m.get("liquidity"))
+    end_date      = m.get("end_date") or m.get("endDate")
+    if end_date is None:
+        missing.append("end_date")
+
+    best_bid = best_ask = spread = depth_1pct = None
+    last_trade_age = trade_freq = std_short = None
+    if orderbook:
+        best_bid       = _safe_float(orderbook.get("best_bid"))
+        best_ask       = _safe_float(orderbook.get("best_ask"))
+        if best_bid is not None and best_ask is not None:
+            spread = max(0.0, best_ask - best_bid)
+        mid_price = None
+        if best_bid is not None and best_ask is not None:
+            mid_price = (best_bid + best_ask) / 2.0
+        bid_depth = _depth_within_pct(orderbook.get("bids"), mid_price)
+        ask_depth = _depth_within_pct(orderbook.get("asks"), mid_price)
+        if bid_depth is not None or ask_depth is not None:
+            depth_1pct = (bid_depth or 0.0) + (ask_depth or 0.0)
+        last_trade_age = _safe_float(orderbook.get("last_trade_age_sec"))
+        trade_freq     = _safe_float(orderbook.get("trade_freq_1h"))
+        std_short      = _safe_float(orderbook.get("std_short"))
+    else:
+        missing.append("orderbook")
+
+    if news_text is None:
+        missing.append("news_text")
+
+    # ---- category + scoring ----
+    category = classify_category(question)
+    scores = {
+        "liquidity_score":  liquidity_score(liquidity_usd, depth_1pct),
+        "spread_score":     spread_score(spread),
+        "activity_score":   activity_score(last_trade_age, trade_freq),
+        "volatility_score": volatility_score(std_short),
+        "news_heat_score":  news_heat_score(question, news_text),
+        "time_score":       time_score(end_date),
+    }
+    tscore = tradability_score(scores)
+    tier   = assign_tier(category, tscore, slug)
+
+    # ---- shadow defaults (Phase 2/3 will consume; Phase 1 just records) ----
+    defaults = TIER_DEFAULTS.get(tier, TIER_DEFAULTS["D"])
+
+    return {
+        "id":                    mid,
+        "slug":                  slug,
+        "question":              question,
+        "category":              category,
+        "tier":                  tier,
+        "tradability_score":     round(tscore, 2),
+        "scores":                {k: round(float(v), 2) for k, v in scores.items()},
+        "liquidity_usd":         liquidity_usd,
+        "spread":                spread,
+        "best_bid":              best_bid,
+        "best_ask":              best_ask,
+        "depth_1pct_usd":        depth_1pct,
+        "missing_fields":        missing,
+        "shadow_capital_weight": defaults["capital_weight"],
+        "shadow_stop_loss":      defaults["stop_loss"],
+        "shadow_take_profit":    defaults["take_profit"],
+        "phase":                 "shadow",
+        "schema_version":        SCHEMA_VERSION,
+    }
+
+
 class MarketIntelligence:
     def __init__(self, base_dir=None):
         self.base_dir = Path(base_dir) if base_dir else get_base_dir()

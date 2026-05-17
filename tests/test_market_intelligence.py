@@ -177,3 +177,95 @@ def test_tradability_weighted_sum():
 
     # 权重总和必须 = 1.0
     assert sum(WEIGHTS.values()) == pytest.approx(1.0)
+
+
+
+# ---------------- build_profile ----------------
+
+def test_build_profile_minimal_inputs_returns_required_keys():
+    from market_intelligence import build_profile
+    market = {
+        "id": "mkt-1",
+        "slug": "btc-100k-by-eoy",
+        "question": "Will Bitcoin hit $100k by end of year?",
+        "liquidity": 50000,
+        "volume": 200000,
+        "end_date": "2099-01-01T00:00:00Z",
+    }
+    profile = build_profile(market, orderbook=None, news_text=None)
+    # 必备字段
+    for k in [
+        "id", "slug", "question", "category", "tier",
+        "tradability_score", "scores",
+        "liquidity_usd", "spread", "best_bid", "best_ask",
+        "missing_fields", "shadow_capital_weight", "shadow_stop_loss",
+        "shadow_take_profit", "phase", "schema_version",
+    ]:
+        assert k in profile, f"missing key: {k}"
+    assert profile["phase"] == "shadow"
+    assert profile["category"] == "crypto"
+    assert profile["tier"] == "S"  # btc slug → S
+    # missing_fields 应该包含 orderbook / news
+    assert "orderbook" in profile["missing_fields"]
+    assert "news_text" in profile["missing_fields"]
+
+
+def test_build_profile_with_orderbook_extracts_spread():
+    from market_intelligence import build_profile
+    market = {
+        "id": "mkt-2",
+        "slug": "elections-2099",
+        "question": "Will the incumbent win the 2099 election?",
+        "liquidity": 100000,
+        "end_date": "2099-11-05T00:00:00Z",
+    }
+    orderbook = {
+        "best_bid": 0.42,
+        "best_ask": 0.45,
+        "bids": [{"price": 0.42, "size": 1000}, {"price": 0.41, "size": 2000}],
+        "asks": [{"price": 0.45, "size": 800},  {"price": 0.46, "size": 1500}],
+        "last_trade_age_sec": 90,
+        "trade_freq_1h": 10,
+        "std_short": 0.02,
+    }
+    profile = build_profile(market, orderbook=orderbook, news_text=None)
+    assert profile["best_bid"]  == 0.42
+    assert profile["best_ask"]  == 0.45
+    assert profile["spread"]    == pytest.approx(0.03)
+    assert profile["category"]  == "politics_macro"
+    # tradability should not be the all-fallback value
+    assert profile["tradability_score"] > 30
+
+
+def test_build_profile_records_missing_fields_list():
+    from market_intelligence import build_profile
+    market = {"id": "mkt-3", "slug": "x", "question": "Random?", "end_date": None}
+    profile = build_profile(market, orderbook=None, news_text=None)
+    for f in ("orderbook", "news_text", "end_date"):
+        assert f in profile["missing_fields"]
+    # 全 fallback → tradability 应在 25~55 之间（保守区）
+    assert 20 <= profile["tradability_score"] <= 60
+
+
+def test_build_profile_shadow_params_match_tier():
+    from market_intelligence import build_profile, TIER_DEFAULTS
+    market = {
+        "id": "mkt-4", "slug": "btc-200k",
+        "question": "Will Bitcoin hit $200k?",
+        "liquidity": 1_000_000,
+        "end_date": "2099-12-31T00:00:00Z",
+    }
+    p = build_profile(market, orderbook=None, news_text=None)
+    tier = p["tier"]
+    defaults = TIER_DEFAULTS[tier]
+    assert p["shadow_capital_weight"] == defaults["capital_weight"]
+    assert p["shadow_stop_loss"]      == defaults["stop_loss"]
+    assert p["shadow_take_profit"]    == defaults["take_profit"]
+
+
+def test_build_profile_never_raises_on_garbage_input():
+    from market_intelligence import build_profile
+    garbage = {"id": None, "slug": None, "question": None}
+    p = build_profile(garbage, orderbook=None, news_text=None)
+    assert p["category"] == "other"
+    assert p["tier"] in ("C", "D")
