@@ -324,3 +324,71 @@ def test_orderbook_cache_missing_file_ok(tmp_path):
     assert c.get("anything") is None
     c.set("mkt-5", {"x": 1})
     assert cache_file.exists()
+
+
+
+# ---------------- fetch_orderbook ----------------
+
+def test_fetch_orderbook_returns_none_on_http_error(monkeypatch):
+    from market_intelligence import fetch_orderbook
+    class FakeResp:
+        status_code = 500
+        text = "boom"
+        def json(self): return {}
+    def fake_get(url, params=None, timeout=None):
+        return FakeResp()
+    import market_intelligence as mi
+    monkeypatch.setattr(mi.requests, "get", fake_get)
+    assert fetch_orderbook("0xabc") is None
+
+
+def test_fetch_orderbook_returns_none_on_exception(monkeypatch):
+    from market_intelligence import fetch_orderbook
+    def boom(url, params=None, timeout=None):
+        raise RuntimeError("network down")
+    import market_intelligence as mi
+    monkeypatch.setattr(mi.requests, "get", boom)
+    assert fetch_orderbook("0xabc") is None
+
+
+def test_fetch_orderbook_parses_clob_response(monkeypatch):
+    from market_intelligence import fetch_orderbook
+    payload = {
+        "bids": [{"price": "0.42", "size": "1000"}, {"price": "0.41", "size": "2000"}],
+        "asks": [{"price": "0.45", "size": "800"},  {"price": "0.46", "size": "1500"}],
+    }
+    class FakeResp:
+        status_code = 200
+        def json(self): return payload
+    def fake_get(url, params=None, timeout=None):
+        assert "clob.polymarket.com" in url or "polymarket" in url.lower()
+        return FakeResp()
+    import market_intelligence as mi
+    monkeypatch.setattr(mi.requests, "get", fake_get)
+    ob = fetch_orderbook("0xabc")
+    assert ob is not None
+    assert ob["best_bid"] == 0.42
+    assert ob["best_ask"] == 0.45
+    assert len(ob["bids"]) == 2
+    assert len(ob["asks"]) == 2
+
+
+def test_fetch_orderbook_empty_book_returns_none_prices(monkeypatch):
+    from market_intelligence import fetch_orderbook
+    class FakeResp:
+        status_code = 200
+        def json(self): return {"bids": [], "asks": []}
+    def fake_get(url, params=None, timeout=None):
+        return FakeResp()
+    import market_intelligence as mi
+    monkeypatch.setattr(mi.requests, "get", fake_get)
+    ob = fetch_orderbook("0xabc")
+    assert ob is not None
+    assert ob["best_bid"] is None
+    assert ob["best_ask"] is None
+
+
+def test_fetch_orderbook_handles_missing_token_id():
+    from market_intelligence import fetch_orderbook
+    assert fetch_orderbook(None) is None
+    assert fetch_orderbook("") is None

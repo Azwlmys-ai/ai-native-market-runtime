@@ -18,6 +18,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _paths import get_base_dir
@@ -406,6 +408,61 @@ def build_profile(market, orderbook=None, news_text=None):
         "shadow_take_profit":    defaults["take_profit"],
         "phase":                 "shadow",
         "schema_version":        SCHEMA_VERSION,
+    }
+
+
+# ---------------- fetch_orderbook (Phase 1: failure-tolerant) ----------------
+
+CLOB_BOOK_URL = "https://clob.polymarket.com/book"
+HTTP_TIMEOUT  = 4.0
+
+
+def fetch_orderbook(token_id, url=CLOB_BOOK_URL, timeout=HTTP_TIMEOUT):
+    """Fetch CLOB orderbook for a token_id.
+
+    Returns dict {best_bid, best_ask, bids, asks} on success, None on ANY failure.
+    Never raises. Logs nothing (caller decides).
+
+    Phase 1 contract: failure → missing field → conservative score 30.
+    """
+    if not token_id:
+        return None
+    try:
+        resp = requests.get(url, params={"token_id": token_id}, timeout=timeout)
+    except Exception:
+        return None
+    if getattr(resp, "status_code", 0) != 200:
+        return None
+    try:
+        data = resp.json() or {}
+    except Exception:
+        return None
+
+    raw_bids = data.get("bids") or []
+    raw_asks = data.get("asks") or []
+
+    def _norm(rows):
+        out = []
+        for r in rows:
+            try:
+                p = float(r.get("price"))
+                s = float(r.get("size"))
+                out.append({"price": p, "size": s})
+            except (TypeError, ValueError, AttributeError):
+                continue
+        return out
+
+    bids = _norm(raw_bids)
+    asks = _norm(raw_asks)
+    # CLOB returns bids sorted desc, asks asc — but we defensively pick extremes
+    best_bid = max((b["price"] for b in bids), default=None)
+    best_ask = min((a["price"] for a in asks), default=None)
+
+    return {
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "bids": bids,
+        "asks": asks,
     }
 
 
