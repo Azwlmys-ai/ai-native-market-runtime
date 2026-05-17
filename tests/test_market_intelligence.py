@@ -269,3 +269,58 @@ def test_build_profile_never_raises_on_garbage_input():
     p = build_profile(garbage, orderbook=None, news_text=None)
     assert p["category"] == "other"
     assert p["tier"] in ("C", "D")
+
+
+
+# ---------------- OrderbookCache ----------------
+
+def test_orderbook_cache_set_get_roundtrip(tmp_path):
+    from market_intelligence import OrderbookCache
+    cache_file = tmp_path / "ob.json"
+    c = OrderbookCache(cache_file, ttl_sec=120)
+    c.set("mkt-1", {"best_bid": 0.42, "best_ask": 0.45})
+    got = c.get("mkt-1")
+    assert got["best_bid"] == 0.42
+
+
+def test_orderbook_cache_expires_after_ttl(tmp_path):
+    from market_intelligence import OrderbookCache
+    cache_file = tmp_path / "ob.json"
+    c = OrderbookCache(cache_file, ttl_sec=1)
+    c.set("mkt-2", {"best_bid": 0.5})
+    # Manually backdate the entry
+    import json, time
+    data = json.loads(cache_file.read_text())
+    data["mkt-2"]["fetched_at"] = time.time() - 3600
+    cache_file.write_text(json.dumps(data))
+    c2 = OrderbookCache(cache_file, ttl_sec=1)
+    assert c2.get("mkt-2") is None
+
+
+def test_orderbook_cache_survives_corrupt_file(tmp_path):
+    from market_intelligence import OrderbookCache
+    cache_file = tmp_path / "ob.json"
+    cache_file.write_text("{not valid json")
+    c = OrderbookCache(cache_file, ttl_sec=120)
+    # Should not raise; behaves as empty cache
+    assert c.get("anything") is None
+    c.set("mkt-3", {"best_bid": 0.6})
+    assert c.get("mkt-3")["best_bid"] == 0.6
+
+
+def test_orderbook_cache_persists_across_instances(tmp_path):
+    from market_intelligence import OrderbookCache
+    cache_file = tmp_path / "ob.json"
+    c1 = OrderbookCache(cache_file, ttl_sec=600)
+    c1.set("mkt-4", {"best_bid": 0.7})
+    c2 = OrderbookCache(cache_file, ttl_sec=600)
+    assert c2.get("mkt-4")["best_bid"] == 0.7
+
+
+def test_orderbook_cache_missing_file_ok(tmp_path):
+    from market_intelligence import OrderbookCache
+    cache_file = tmp_path / "subdir" / "ob.json"
+    c = OrderbookCache(cache_file, ttl_sec=120)
+    assert c.get("anything") is None
+    c.set("mkt-5", {"x": 1})
+    assert cache_file.exists()

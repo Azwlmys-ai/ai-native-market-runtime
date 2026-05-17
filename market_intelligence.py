@@ -409,6 +409,65 @@ def build_profile(market, orderbook=None, news_text=None):
     }
 
 
+# ---------------- OrderbookCache ----------------
+
+import time as _time
+
+
+class OrderbookCache:
+    """JSON-backed orderbook cache with TTL.
+
+    Phase 1 contract:
+      - Disk file: data/orderbook_cache.json
+      - TTL default 120s
+      - Corrupt file → behaves as empty (logs warning, never raises)
+      - Missing parent dirs → created on first set()
+      - Thread/process safety: single-writer only (Phase 1 = single orchestrator)
+    """
+
+    def __init__(self, path, ttl_sec=120):
+        self.path = Path(path)
+        self.ttl_sec = int(ttl_sec)
+        self._data = self._load()
+
+    def _load(self):
+        if not self.path.exists():
+            return {}
+        try:
+            return json.loads(self.path.read_text())
+        except Exception:
+            # corrupt cache file — start fresh, but do NOT overwrite on disk
+            # until next set() (避免误删用户数据)
+            return {}
+
+    def _flush(self):
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text(json.dumps(self._data))
+            tmp.replace(self.path)
+        except Exception:
+            pass  # disk failure must not crash main loop
+
+    def get(self, market_id):
+        entry = self._data.get(str(market_id))
+        if not entry:
+            return None
+        fetched = entry.get("fetched_at")
+        if fetched is None:
+            return None
+        if _time.time() - float(fetched) > self.ttl_sec:
+            return None
+        return entry.get("orderbook")
+
+    def set(self, market_id, orderbook):
+        self._data[str(market_id)] = {
+            "orderbook":  orderbook,
+            "fetched_at": _time.time(),
+        }
+        self._flush()
+
+
 class MarketIntelligence:
     def __init__(self, base_dir=None):
         self.base_dir = Path(base_dir) if base_dir else get_base_dir()
