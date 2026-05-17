@@ -601,7 +601,7 @@ class MarketIntelligence:
             # 日志失败不能影响主流程
             pass
 
-    def run(self, fetcher=None, news_text=None):
+    def run(self, fetcher=None, news_text=None, max_markets=None):
         """Build profiles for every market in latest_data.json.
 
         Phase 1 contract:
@@ -625,6 +625,8 @@ class MarketIntelligence:
             return {"success": False, "error": err, "markets_processed": 0}
 
         markets = latest.get("polymarket_markets") or []
+        if max_markets is not None:
+            markets = markets[: int(max_markets)]
         cache = OrderbookCache(self.data_dir / "orderbook_cache.json", ttl_sec=120)
         fetcher = fetcher if fetcher is not None else fetch_orderbook
 
@@ -681,7 +683,32 @@ class MarketIntelligence:
                 "tier_distribution": tier_dist, "output_path": str(out_path)}
 
 
-if __name__ == "__main__":
-    mi = MarketIntelligence()
-    result = mi.run()
+def _parse_args(argv=None):
+    import argparse
+    p = argparse.ArgumentParser(
+        prog="market_intelligence",
+        description="Phase 1 shadow-mode market intelligence builder",
+    )
+    p.add_argument("--max-markets", type=int, default=None,
+                   help="Process at most N markets (debug)")
+    p.add_argument("--no-network", action="store_true",
+                   help="Skip CLOB orderbook fetch (offline mode)")
+    return p.parse_args(argv)
+
+
+def _null_fetcher(token_id):
+    return None
+
+
+def _main(argv=None, base_dir=None):
+    args = _parse_args(argv)
+    fetcher = _null_fetcher if args.no_network else fetch_orderbook
+    mi = MarketIntelligence(base_dir=base_dir)
+    result = mi.run(fetcher=fetcher, max_markets=args.max_markets)
     print(json.dumps(result, indent=2, default=str))
+    return 0 if result.get("success") else 1
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(_main())

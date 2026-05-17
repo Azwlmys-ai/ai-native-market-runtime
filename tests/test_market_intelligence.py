@@ -602,3 +602,47 @@ def test_market_intelligence_run_includes_metadata(tmp_path):
     assert "phase" in written
     assert "schema_version" in written
     assert "tier_distribution" in written  # 观察用：每档统计
+
+
+
+# ---------------- CLI ----------------
+
+def test_cli_parses_args():
+    from market_intelligence import _parse_args
+    args = _parse_args(["--max-markets", "5", "--no-network"])
+    assert args.max_markets == 5
+    assert args.no_network is True
+
+    args2 = _parse_args([])
+    assert args2.max_markets is None
+    assert args2.no_network is False
+
+
+def test_cli_main_no_network_uses_null_fetcher(tmp_path, monkeypatch):
+    from market_intelligence import _main
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "latest_data.json").write_text(json.dumps({
+        "polymarket_markets": [
+            {"id": "m1", "slug": "x", "question": "x", "clobTokenIds": ["0xT"]},
+        ]
+    }))
+    # 直接传 base_dir，验证 --no-network 不会调用任何 HTTP
+    code = _main(["--no-network"], base_dir=tmp_path)
+    assert code == 0
+    written = json.loads((tmp_path / "data" / "market_intelligence.json").read_text())
+    assert len(written["profiles"]) == 1
+    assert "orderbook" in written["profiles"][0]["missing_fields"]
+
+
+def test_cli_main_max_markets_limits_input(tmp_path):
+    from market_intelligence import _main
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "latest_data.json").write_text(json.dumps({
+        "polymarket_markets": [
+            {"id": f"m{i}", "slug": "x", "question": "x"} for i in range(20)
+        ]
+    }))
+    code = _main(["--no-network", "--max-markets", "3"], base_dir=tmp_path)
+    assert code == 0
+    written = json.loads((tmp_path / "data" / "market_intelligence.json").read_text())
+    assert len(written["profiles"]) == 3
