@@ -58,6 +58,75 @@ def classify_category(question: str) -> str:
     return "other"
 
 
+# Tier priors: (allowed_tier_set, default_tier).
+# 类别先验保证 sports / entertainment 即使评分高也不会跳到 S。
+TIER_PRIORS = {
+    "crypto":         ({"S", "A", "B", "C"}, "A"),
+    "politics_macro": ({"A", "B", "C"},      "A"),
+    "politics_other": ({"B", "C", "D"},      "C"),
+    "breaking_news":  ({"B", "C"},           "B"),
+    "ai_tech":        ({"B", "C"},           "B"),
+    "weather":        ({"B", "C"},           "C"),
+    "sports":         ({"C", "D"},           "C"),
+    "entertainment":  ({"C", "D"},           "D"),
+    "other":          ({"C", "D"},           "D"),
+}
+
+# Crypto slug tokens that force Tier S (case-insensitive substring match on slug).
+TIER_S_CRYPTO_SLUG_TOKENS = (
+    "btc", "bitcoin", "eth", "ethereum", "sol", "solana", "xrp", "ripple",
+)
+
+_TIER_ORDER = ["S", "A", "B", "C", "D"]
+
+
+def _bucket_from_score(score: float) -> str:
+    """Map tradability_score (0-100) to a raw bucket before category priors."""
+    if score >= 80:
+        return "S"
+    if score >= 60:
+        return "A"
+    if score >= 40:
+        return "B"
+    if score >= 20:
+        return "C"
+    return "D"
+
+
+def assign_tier(category: str, tradability_score: float, slug: str) -> str:
+    """Assign tier S/A/B/C/D.
+
+    Priority:
+      1. crypto + slug 命中白名单 → S
+      2. 否则按 tradability_score 算 raw bucket
+      3. 用 TIER_PRIORS[category] 把 bucket 收敛到 allowed 集合（取不高于 bucket 的最近 allowed 档）
+      4. 找不到则返回 category 的 default_tier
+
+    Pure function. Never raises for unknown category — falls back to "other" priors.
+    """
+    slug_lower = (slug or "").lower()
+    if category == "crypto":
+        if any(tok in slug_lower for tok in TIER_S_CRYPTO_SLUG_TOKENS):
+            return "S"
+
+    allowed, default = TIER_PRIORS.get(category, TIER_PRIORS["other"])
+
+    try:
+        score = float(tradability_score)
+    except (TypeError, ValueError):
+        return default
+
+    bucket = _bucket_from_score(score)
+    if bucket in allowed:
+        return bucket
+    # 从 bucket 起向下找最近的 allowed 档（不上调）
+    start = _TIER_ORDER.index(bucket)
+    for tier in _TIER_ORDER[start:]:
+        if tier in allowed:
+            return tier
+    return default
+
+
 class MarketIntelligence:
     def __init__(self, base_dir=None):
         self.base_dir = Path(base_dir) if base_dir else get_base_dir()
