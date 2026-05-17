@@ -12,6 +12,11 @@ from pathlib import Path
 from datetime import datetime
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 SIGNAL_MAX_AGE_SECONDS = 2 * 60 * 60
 PYTHON_BIN = sys.executable
 
@@ -23,6 +28,9 @@ class Orchestrator:
         self.logs_dir = self.base_dir / "logs"
         self.data_dir.mkdir(exist_ok=True)
         self.logs_dir.mkdir(exist_ok=True)
+        self.status_file = self.data_dir / "orchestrator_status.json"
+        self.lock_file = self.data_dir / "orchestrator.lock"
+        self._lock_handle = None
         self._bootstrap_runtime_files()
     
     def log(self, message):
@@ -34,9 +42,14 @@ class Orchestrator:
         log_file = self.logs_dir / f"orchestrator_{datetime.now().strftime('%Y%m%d')}.log"
         with open(log_file, 'a') as f:
             f.write(log_msg + "\n")
+        self._write_status_from_log(message, timestamp)
     
     def run_once(self):
         """执行一次完整的扫描周期"""
+        if not self._acquire_run_lock():
+            self.log("⏭️  已有扫描周期在运行，本次启动跳过")
+            return
+
         self.log("=" * 60)
         self.log("开始新的扫描周期")
         
@@ -139,6 +152,74 @@ class Orchestrator:
         
         except Exception as e:
             self.log(f"❌ 扫描周期失败: {e}")
+        finally:
+            self._release_run_lock()
+
+    def _write_status_from_log(self, message, timestamp):
+        """Persist a compact heartbeat for external monitors and bots."""
+        try:
+            previous = {}
+            if self.status_file.exists():
+                try:
+                    previous = json.loads(self.status_file.read_text())
+                except Exception:
+                    previous = {}
+
+            state = previous.get("state", "running")
+            current_step = previous.get("current_step")
+            if message == "开始新的扫描周期":
+                state = "running"
+                current_step = None
+            elif message.startswith("步骤 "):
+                state = "running"
+                current_step = message
+            elif "扫描周期完成" in message:
+                state = "completed"
+            elif "扫描周期失败" in message:
+                state = "failed"
+            elif "已有扫描周期在运行" in message:
+                state = "skipped_locked"
+
+            payload = {
+                "state": state,
+                "pid": os.getpid(),
+                "updated_at": datetime.now().isoformat(),
+                "log_timestamp": timestamp,
+                "current_step": current_step,
+                "last_log": message,
+            }
+            with open(self.status_file, "w") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _acquire_run_lock(self):
+        """Prevent overlapping runs from cron, Hermes, VS Code, or manual shells."""
+        if fcntl is None:
+            return True
+        self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(self.lock_file, "w")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            return False
+
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid={os.getpid()}\nstarted_at={datetime.now().isoformat()}\n")
+        handle.flush()
+        self._lock_handle = handle
+        return True
+
+    def _release_run_lock(self):
+        if not self._lock_handle or fcntl is None:
+            return
+        try:
+            fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._lock_handle.close()
+            self._lock_handle = None
 
     def _bootstrap_runtime_files(self):
         """Create minimal runtime files that downstream agents expect."""
@@ -248,19 +329,32 @@ class Orchestrator:
                     mid, mname = market_name_map.get(slug, (slug, slug))
                     side = sig.get("side", "")
                     direction = "NO" if "no" in side.lower() else "YES"
-                    fresh_signals.append({
+                    generated_at = sig.get("generated_at", now)
+                    normalized = {
                         "market_id": mid,
                         "market_name": mname,
                         "market": mname,
+                        "market_slug": slug,
                         "direction": direction,
                         "price": sig.get("price", 0.5),
                         "position_size": sig.get("position_size", 0.1),
                         "expected_value": sig.get("ev", sig.get("expected_value", 0)),
                         "confidence": sig.get("confidence", 70),
                         "source": "agent_b",
-                        "generated_at": now,
-                        "timestamp": now,
-                    })
+                        "generated_at": generated_at,
+                        "timestamp": generated_at,
+                    }
+                    for field in (
+                        "data_sources",
+                        "logic_chain",
+                        "risk_notes",
+                        "market_evidence",
+                        "learned_rule_match",
+                        "reason",
+                    ):
+                        if field in sig:
+                            normalized[field] = sig[field]
+                    fresh_signals.append(normalized)
             except Exception as e:
                 self.log(f"⚠️  读取 intelligence_report.json 失败: {e}")
 
@@ -373,11 +467,32 @@ class Orchestrator:
         except Exception as e:
             self.log(f"❌ {collector_name} 执行异常: {e}")
     
+    def _is_stop_trading_active(self):
+        """检查 STOP_TRADING 文件是否存在（不抛出异常）。"""
+        try:
+            stop_file = self.data_dir / "STOP_TRADING"
+            if stop_file.exists():
+                content = stop_file.read_text()[:120].strip()
+                self.log(f"🛑 STOP_TRADING 激活: {content}")
+                return True
+        except Exception as e:
+            self.log(f"⚠️  STOP_TRADING 检查异常: {e}")
+        return False
+
     def _execute_signals(self):
         """执行买入信号"""
+        # STOP_TRADING 护栏：dry-run 继续，真实交易被阻断
+        if self._is_stop_trading_active():
+            dry_run = os.environ.get("EXECUTOR_DRY_RUN", "").lower() in ("1", "true", "yes")
+            if dry_run:
+                self.log("⚠️  STOP_TRADING active，但 DRY_RUN 模式继续")
+            else:
+                self.log("🛑 买入执行已被 STOP_TRADING 阻断，跳过")
+                self._write_skipped_execution_results("STOP_TRADING active")
+                return
         try:
             import subprocess
-            
+
             executor_file = self.base_dir / "signal_executor.py"
             if executor_file.exists():
                 result = subprocess.run(
@@ -400,9 +515,15 @@ class Orchestrator:
     
     def _execute_sell_signals(self):
         """执行卖出信号"""
+        # STOP_TRADING 护栏
+        if self._is_stop_trading_active():
+            dry_run = os.environ.get("EXECUTOR_DRY_RUN", "").lower() in ("1", "true", "yes")
+            if not dry_run:
+                self.log("🛑 卖出执行已被 STOP_TRADING 阻断，跳过")
+                return
         try:
             import subprocess
-            
+
             sell_executor_file = self.base_dir / "sell_executor.py"
             if sell_executor_file.exists():
                 result = subprocess.run(
