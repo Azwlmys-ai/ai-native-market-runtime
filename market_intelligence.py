@@ -683,6 +683,29 @@ class MarketIntelligence:
                 "tier_distribution": tier_dist, "output_path": str(out_path)}
 
 
+def safe_run(base_dir=None, fetcher=None, news_text=None, max_markets=None):
+    """Orchestrator-facing entry point — never raises, always returns a dict.
+
+    Contract for Task 12 (orchestrator step 2.5):
+      try:
+          result = market_intelligence.safe_run()
+      except Exception:
+          pass  # safe_run itself promises never to raise; this is just paranoia
+
+    Returns:
+      dict with at minimum {"success": bool, "error": str?, "markets_processed": int?}
+    """
+    try:
+        mi = MarketIntelligence(base_dir=base_dir)
+        return mi.run(fetcher=fetcher, news_text=news_text, max_markets=max_markets)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"safe_run internal error: {e}",
+            "markets_processed": 0,
+        }
+
+
 def _parse_args(argv=None):
     import argparse
     p = argparse.ArgumentParser(

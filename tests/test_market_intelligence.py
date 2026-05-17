@@ -646,3 +646,61 @@ def test_cli_main_max_markets_limits_input(tmp_path):
     assert code == 0
     written = json.loads((tmp_path / "data" / "market_intelligence.json").read_text())
     assert len(written["profiles"]) == 3
+
+
+
+# ---------------- safe_run (orchestrator-facing wrapper) ----------------
+
+def test_safe_run_returns_dict_on_success(tmp_path):
+    from market_intelligence import safe_run
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "latest_data.json").write_text(json.dumps({
+        "polymarket_markets": [{"id": "m1", "slug": "x", "question": "x"}]
+    }))
+    result = safe_run(base_dir=tmp_path, fetcher=lambda t: None)
+    assert isinstance(result, dict)
+    assert result["success"] is True
+    assert result["markets_processed"] == 1
+
+
+def test_safe_run_never_raises_on_missing_data(tmp_path):
+    from market_intelligence import safe_run
+    result = safe_run(base_dir=tmp_path, fetcher=lambda t: None)
+    # No latest_data.json → failure but no raise
+    assert isinstance(result, dict)
+    assert result["success"] is False
+    assert "error" in result
+
+
+def test_safe_run_swallows_internal_errors(tmp_path):
+    """Even if run() somehow blows up (it shouldn't), safe_run catches it."""
+    import market_intelligence as mi_mod
+    from market_intelligence import safe_run
+
+    class BoomRun:
+        def run(self, **kw):
+            raise RuntimeError("simulated crash")
+
+    # Monkey-patch the class constructor for this test only
+    orig = mi_mod.MarketIntelligence
+    try:
+        mi_mod.MarketIntelligence = lambda base_dir=None: BoomRun()
+        result = safe_run(base_dir=tmp_path, fetcher=lambda t: None)
+    finally:
+        mi_mod.MarketIntelligence = orig
+
+    assert isinstance(result, dict)
+    assert result["success"] is False
+    assert "crash" in result["error"].lower() or "error" in result
+
+
+def test_safe_run_signature_orchestrator_friendly():
+    """Contract for Task 12: safe_run() must accept no args and return dict."""
+    import inspect
+    from market_intelligence import safe_run
+    sig = inspect.signature(safe_run)
+    # All params must have defaults so orchestrator can call safe_run() bare
+    for name, param in sig.parameters.items():
+        assert param.default is not inspect.Parameter.empty, (
+            f"safe_run param {name!r} has no default — orchestrator must call it bare"
+        )
