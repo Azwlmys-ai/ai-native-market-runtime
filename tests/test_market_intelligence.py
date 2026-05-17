@@ -1,5 +1,6 @@
 """Tests for market_intelligence.py (Phase 1 — Shadow Mode)."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -483,3 +484,121 @@ def test_enrich_market_fetcher_failure_does_not_raise(monkeypatch):
     profile = enrich_market(market, fetcher=fetcher, cache=None, news_text=None)
     assert "orderbook" in profile["missing_fields"]
     assert profile["best_bid"] is None
+
+
+
+# ---------------- MarketIntelligence.run() ----------------
+
+def test_market_intelligence_run_writes_output(tmp_path, monkeypatch):
+    from market_intelligence import MarketIntelligence
+    # Set up fake base_dir with data/latest_data.json
+    base = tmp_path
+    (base / "data").mkdir()
+    latest = {
+        "polymarket_markets": [
+            {
+                "id": "mkt-1",
+                "slug": "btc-100k",
+                "question": "Will Bitcoin hit $100k by EOY?",
+                "liquidity": 50000,
+                "end_date": "2099-01-01T00:00:00Z",
+                "clobTokenIds": '["0xtok1"]',
+            },
+            {
+                "id": "mkt-2",
+                "slug": "election-2099",
+                "question": "Will the incumbent win the 2099 election?",
+                "liquidity": 100000,
+                "end_date": "2099-11-05T00:00:00Z",
+                "clobTokenIds": '["0xtok2"]',
+            },
+        ]
+    }
+    (base / "data" / "latest_data.json").write_text(json.dumps(latest))
+
+    def fake_fetcher(token_id):
+        return {
+            "best_bid": 0.45, "best_ask": 0.48,
+            "bids": [{"price": 0.45, "size": 500}],
+            "asks": [{"price": 0.48, "size": 600}],
+        }
+
+    mi = MarketIntelligence(base_dir=base)
+    result = mi.run(fetcher=fake_fetcher)
+
+    assert result["success"] is True
+    assert result["markets_processed"] == 2
+    out_path = base / "data" / "market_intelligence.json"
+    assert out_path.exists()
+    written = json.loads(out_path.read_text())
+    assert written["schema_version"]
+    assert written["phase"] == "shadow"
+    assert len(written["profiles"]) == 2
+    assert written["profiles"][0]["id"] == "mkt-1"
+    assert written["profiles"][0]["best_bid"] == 0.45
+
+
+def test_market_intelligence_run_handles_missing_latest_data(tmp_path):
+    from market_intelligence import MarketIntelligence
+    base = tmp_path
+    mi = MarketIntelligence(base_dir=base)
+    result = mi.run(fetcher=lambda t: None)
+    assert result["success"] is False
+    assert "latest_data" in result["error"].lower()
+
+
+def test_market_intelligence_run_skips_bad_markets(tmp_path):
+    from market_intelligence import MarketIntelligence
+    base = tmp_path
+    (base / "data").mkdir()
+    latest = {
+        "polymarket_markets": [
+            None,  # garbage
+            {"id": "good", "slug": "x", "question": "x", "clobTokenIds": ["0xt"]},
+            {},  # empty
+        ]
+    }
+    (base / "data" / "latest_data.json").write_text(json.dumps(latest))
+    mi = MarketIntelligence(base_dir=base)
+    result = mi.run(fetcher=lambda t: None)
+    assert result["success"] is True
+    # Should process all 3 — bad ones get "other"/"D" profiles, never raises
+    written = json.loads((base / "data" / "market_intelligence.json").read_text())
+    assert len(written["profiles"]) == 3
+
+
+def test_market_intelligence_run_uses_cache(tmp_path):
+    from market_intelligence import MarketIntelligence
+    base = tmp_path
+    (base / "data").mkdir()
+    latest = {"polymarket_markets": [
+        {"id": "m1", "slug": "x", "question": "x", "clobTokenIds": ["0xCACHED"]},
+    ]}
+    (base / "data" / "latest_data.json").write_text(json.dumps(latest))
+
+    fetch_calls = []
+    def fetcher(tok):
+        fetch_calls.append(tok)
+        return {"best_bid": 0.5, "best_ask": 0.55, "bids": [], "asks": []}
+
+    mi = MarketIntelligence(base_dir=base)
+    mi.run(fetcher=fetcher)
+    assert fetch_calls == ["0xCACHED"]
+    # Second run should hit cache
+    mi2 = MarketIntelligence(base_dir=base)
+    mi2.run(fetcher=fetcher)
+    assert fetch_calls == ["0xCACHED"]  # no new fetch
+
+
+def test_market_intelligence_run_includes_metadata(tmp_path):
+    from market_intelligence import MarketIntelligence
+    base = tmp_path
+    (base / "data").mkdir()
+    (base / "data" / "latest_data.json").write_text(json.dumps({"polymarket_markets": []}))
+    mi = MarketIntelligence(base_dir=base)
+    mi.run(fetcher=lambda t: None)
+    written = json.loads((base / "data" / "market_intelligence.json").read_text())
+    assert "generated_at" in written
+    assert "phase" in written
+    assert "schema_version" in written
+    assert "tier_distribution" in written  # 观察用：每档统计

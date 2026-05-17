@@ -601,8 +601,87 @@ class MarketIntelligence:
             # 日志失败不能影响主流程
             pass
 
+    def run(self, fetcher=None, news_text=None):
+        """Build profiles for every market in latest_data.json.
+
+        Phase 1 contract:
+          - Reads:  data/latest_data.json
+          - Writes: data/market_intelligence.json
+          - Uses:   data/orderbook_cache.json (TTL 120s)
+          - Never raises — any error returns {"success": False, "error": "..."}.
+          - Pure observation: no downstream consumer in Phase 1.
+        """
+        latest_path = self.data_dir / "latest_data.json"
+        if not latest_path.exists():
+            err = f"latest_data.json not found at {latest_path}"
+            self.log(f"WARN: {err}")
+            return {"success": False, "error": err, "markets_processed": 0}
+
+        try:
+            latest = json.loads(latest_path.read_text())
+        except Exception as e:
+            err = f"latest_data.json parse error: {e}"
+            self.log(f"WARN: {err}")
+            return {"success": False, "error": err, "markets_processed": 0}
+
+        markets = latest.get("polymarket_markets") or []
+        cache = OrderbookCache(self.data_dir / "orderbook_cache.json", ttl_sec=120)
+        fetcher = fetcher if fetcher is not None else fetch_orderbook
+
+        profiles = []
+        for m in markets:
+            try:
+                profile = enrich_market(m or {}, fetcher=fetcher, cache=cache,
+                                        news_text=news_text)
+                profiles.append(profile)
+            except Exception as e:
+                # 极防御：build_profile 应该已经吞掉一切，但再加一层
+                self.log(f"WARN: profile build failed: {e}")
+                profiles.append({
+                    "id": (m or {}).get("id"),
+                    "slug": (m or {}).get("slug"),
+                    "category": "other",
+                    "tier": "D",
+                    "tradability_score": 0,
+                    "missing_fields": ["build_error"],
+                    "phase": "shadow",
+                    "schema_version": SCHEMA_VERSION,
+                    "error": str(e)[:200],
+                })
+
+        tier_dist = {"S": 0, "A": 0, "B": 0, "C": 0, "D": 0}
+        for p in profiles:
+            t = p.get("tier")
+            if t in tier_dist:
+                tier_dist[t] += 1
+
+        output = {
+            "generated_at":    datetime.now().isoformat(),
+            "phase":           "shadow",
+            "schema_version":  SCHEMA_VERSION,
+            "markets_total":   len(markets),
+            "tier_distribution": tier_dist,
+            "profiles":        profiles,
+        }
+
+        out_path = self.data_dir / "market_intelligence.json"
+        try:
+            tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(output, indent=2, default=str))
+            tmp.replace(out_path)
+        except Exception as e:
+            err = f"write failed: {e}"
+            self.log(f"WARN: {err}")
+            return {"success": False, "error": err, "markets_processed": len(profiles)}
+
+        self.log(
+            f"OK markets={len(profiles)} tiers={tier_dist} -> {out_path.name}"
+        )
+        return {"success": True, "markets_processed": len(profiles),
+                "tier_distribution": tier_dist, "output_path": str(out_path)}
+
 
 if __name__ == "__main__":
-    # Task 1 阶段仅冒烟，后续任务实现 run()
     mi = MarketIntelligence()
-    mi.log("scaffold ready (Task 1)")
+    result = mi.run()
+    print(json.dumps(result, indent=2, default=str))
