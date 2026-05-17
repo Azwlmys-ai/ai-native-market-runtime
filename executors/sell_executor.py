@@ -177,24 +177,45 @@ class SellExecutor:
         with open(path, "w") as f:
             json.dump(records, f, indent=2, ensure_ascii=False)
 
+    def _write_sell_execution_results(self, total, results):
+        success_count = sum(1 for result in results if result["status"] == "success")
+        dry_run_count = sum(1 for result in results if result["status"] == "dry_run")
+        failed_count = total - success_count - dry_run_count
+        output = {
+            "timestamp": datetime.now().isoformat(),
+            "total": total,
+            "success": success_count,
+            "dry_run": dry_run_count,
+            "failed": failed_count,
+            "results": results,
+        }
+        output_file = self.data_dir / "sell_execution_results.json"
+        with open(output_file, "w") as f:
+            json.dump(output, f, indent=2, ensure_ascii=False)
+        return output
+
     def run(self):
         signals = self.load_sell_signals()
         if not signals:
             self.log("⚠️ 无卖出信号")
+            self._write_sell_execution_results(total=0, results=[])
             return
 
         results = [self.execute_sell(signal) for signal in signals]
-        success_count = sum(1 for result in results if result["status"] == "success")
-        dry_run_count = sum(1 for result in results if result["status"] == "dry_run")
-        failed_count = len(results) - success_count - dry_run_count
+        output = self._write_sell_execution_results(total=len(signals), results=results)
 
-        self.log(f"✅ 卖出完成: {success_count} success, {dry_run_count} dry-run, {failed_count} failed")
+        self.log(
+            f"✅ 卖出完成: {output['success']} success, "
+            f"{output['dry_run']} dry-run, {output['failed']} failed"
+        )
 
-        sell_signals_file = self.data_dir / "sell_signals.json"
-        with open(sell_signals_file, "w") as f:
-            json.dump([], f)
-
-        self.log("✅ 卖出信号已清空")
+        if output["success"] > 0 and output["dry_run"] == 0 and output["failed"] == 0:
+            sell_signals_file = self.data_dir / "sell_signals.json"
+            with open(sell_signals_file, "w") as f:
+                json.dump([], f)
+            self.log("✅ 卖出信号已清空")
+        else:
+            self.log("ℹ️  卖出信号保留，等待真实成功执行后清空")
 
 
 def main():

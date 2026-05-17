@@ -35,7 +35,7 @@ def test_load_config():
 
     cfg = load_llm_config()
     assert "agent_models" in cfg
-    assert cfg["agent_models"]["agent_codex"] == "gpt-5.4-mini-2026-03-17"
+    assert cfg["agent_models"]["agent_codex"] == "deepseek-v4-flash"
     fallback = get_fallback_map(cfg)
     assert fallback["grok-4.3"] == "claude-opus-4-7"
     assert "[REDACTED]" not in fallback
@@ -421,6 +421,48 @@ def test_sell_executor_dry_run_env(tmp_path, monkeypatch):
 
     assert r["status"] == "dry_run"
     mock_run.assert_not_called()
+
+
+def test_sell_executor_writes_zero_results_when_no_signals(tmp_path):
+    from executors.sell_executor import SellExecutor
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "data" / "sell_signals.json").write_text("[]")
+    executor = SellExecutor(base_dir=str(tmp_path))
+
+    executor.run()
+
+    output = json.loads((tmp_path / "data" / "sell_execution_results.json").read_text())
+    assert output["total"] == 0
+    assert output["success"] == 0
+    assert output["dry_run"] == 0
+    assert output["failed"] == 0
+    assert output["results"] == []
+
+
+def test_sell_executor_run_writes_dry_run_results(tmp_path, monkeypatch):
+    from executors.sell_executor import SellExecutor
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "data" / "sell_signals.json").write_text(json.dumps([
+        {"market": "test-market", "outcome": "NO", "shares": 3.5, "reason": "test"}
+    ]))
+    executor = SellExecutor(base_dir=str(tmp_path))
+    monkeypatch.setenv("EXECUTOR_DRY_RUN", "1")
+
+    executor.run()
+
+    output = json.loads((tmp_path / "data" / "sell_execution_results.json").read_text())
+    assert output["total"] == 1
+    assert output["success"] == 0
+    assert output["dry_run"] == 1
+    assert output["failed"] == 0
+    assert output["results"][0]["status"] == "dry_run"
+    assert len(json.loads((tmp_path / "data" / "sell_signals.json").read_text())) == 1
 
 
 def test_dump_pm_history_rejects_non_json():
@@ -1570,6 +1612,108 @@ def test_agent_m_preprocess_caps_position_for_whitelist(tmp_path):
     processed3 = agent._preprocess_signal(pol_sig, cls3)
     assert processed3 is pol_sig, "non-whitelist signals must be returned unchanged"
     assert processed3["position_size"] == pytest.approx(0.22)
+
+
+def test_agent_m_rejects_whitelist_extreme_without_audit_fields(tmp_path):
+    """
+    High-price sports whitelist signals must fail closed when Agent B does not
+    provide auditable data_sources and logic_chain.
+    """
+    AgentM = _load_agent_m_class()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "logs").mkdir()
+    agent = AgentM(base_dir=str(tmp_path))
+
+    signal = {
+        "market_id": "montreal-cup",
+        "market_name": "Will the Montreal Canadiens win the 2026 NHL Stanley Cup?",
+        "direction": "NO",
+        "price": 0.9075,
+        "position_size": 0.1,
+        "expected_value": 9.2,
+    }
+
+    result = agent.review_signal(signal)
+
+    assert result["decision"] == "REJECT"
+    assert result["market_id"] == "montreal-cup"
+    assert "data_sources" in result["reason"]
+    assert "logic_chain" in result["reason"]
+    assert result["review"]["failure_probability"] == 100
+    assert agent.cache_misses == 0, "hard rejection must happen before cache/LLM review"
+
+
+def test_agent_m_rejects_signal_for_violated_theme_exposure(tmp_path):
+    AgentM = _load_agent_m_class()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (tmp_path / "logs").mkdir()
+    (data_dir / "risk_snapshot.json").write_text(json.dumps({
+        "exposure": {
+            "violations": [{
+                "type": "single_theme_exposure",
+                "theme": "2028_democratic_presidential_nomination",
+                "value": 4513.39,
+                "limit": 0.3,
+            }]
+        }
+    }))
+    agent = AgentM(base_dir=str(tmp_path))
+
+    signal = {
+        "market_id": "raimondo-2028",
+        "market_name": "Will Gina Raimondo win the 2028 Democratic presidential nomination?",
+        "direction": "YES",
+        "price": 0.11,
+        "position_size": 0.1,
+        "data_sources": ["Polymarket"],
+        "logic_chain": ["test"],
+    }
+
+    result = agent.review_signal(signal)
+
+    assert result["decision"] == "REJECT"
+    assert "2028_democratic_presidential_nomination" in result["reason"]
+    assert "拒绝继续加仓" in result["reason"]
+    assert agent.cache_misses == 0, "risk hard rejection must happen before cache/LLM review"
+
+
+def test_risk_engine_uses_pm_trader_position_values_for_theme_exposure(tmp_path):
+    from risk.risk_engine import RiskEngine
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    positions = [
+        {
+            "market_slug": "will-gina-raimondo-win-the-2028-democratic-presidential-nomination",
+            "market_question": "Will Gina Raimondo win the 2028 Democratic presidential nomination?",
+            "current_value": 1714.29,
+            "total_cost": 1600,
+        },
+        {
+            "market_slug": "will-zohran-mamdani-win-the-2028-democratic-presidential-nomination",
+            "market_question": "Will Zohran Mamdani win the 2028 Democratic presidential nomination?",
+            "current_value": 1406.25,
+            "total_cost": 1500,
+        },
+        {
+            "market_slug": "will-tim-walz-win-the-2028-democratic-presidential-nomination",
+            "market_question": "Will Tim Walz win the 2028 Democratic presidential nomination?",
+            "current_value": 1392.86,
+            "total_cost": 1500,
+        },
+    ]
+    (data_dir / "positions.json").write_text(json.dumps(positions))
+
+    exposure = RiskEngine(tmp_path).check_exposure()
+
+    assert exposure["total_exposure"] == pytest.approx(4513.4)
+    assert exposure["by_theme"]["2028_democratic_presidential_nomination"] == pytest.approx(4513.4)
+    assert any(
+        v["type"] == "single_theme_exposure"
+        and v["theme"] == "2028_democratic_presidential_nomination"
+        for v in exposure["violations"]
+    )
 
 
 def test_agent_m_backtest_script_runs_clean():

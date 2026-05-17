@@ -134,6 +134,129 @@ def apply_learned_rules(market_data, learned_rules):
     
     return filtered_markets, rejected_markets
 
+
+def _market_index(latest_data):
+    markets = latest_data.get('polymarket_markets', [])
+    return {
+        market.get('slug'): market
+        for market in markets
+        if isinstance(market, dict) and market.get('slug')
+    }
+
+
+def _signal_side_to_direction(side):
+    return 'NO' if 'no' in str(side).lower() else 'YES'
+
+
+def _signal_price(signal, market):
+    explicit = signal.get('price')
+    if explicit is not None:
+        try:
+            return float(explicit)
+        except (TypeError, ValueError):
+            return 0.5
+
+    outcomes = [str(o).lower() for o in market.get('outcomes', ['yes', 'no'])]
+    prices = market.get('outcome_prices', [])
+    direction = _signal_side_to_direction(signal.get('side', ''))
+    try:
+        idx = outcomes.index(direction.lower())
+        return float(prices[idx])
+    except (ValueError, IndexError):
+        return 0.5
+
+
+def enrich_signals(signals, latest_data, learned_rules):
+    """Attach auditable fields required by Agent M.
+
+    This layer only uses data already present in latest_data/learned_rules. It
+    skips signals that cannot be tied back to a real market row or learned rule.
+    """
+    markets = _market_index(latest_data)
+    enriched = []
+    skipped = []
+    generated_at = datetime.now().isoformat()
+    rules_available = bool(learned_rules)
+
+    for signal in signals:
+        if not isinstance(signal, dict):
+            skipped.append({'signal': signal, 'reason': 'non_object_signal'})
+            continue
+
+        slug = signal.get('market_slug')
+        market = markets.get(slug)
+        if not market:
+            skipped.append({'signal': signal, 'reason': 'missing_market_data'})
+            continue
+
+        rule_match = signal.get('learned_rule_match')
+        if not rule_match or not rules_available:
+            skipped.append({'signal': signal, 'reason': 'missing_learned_rule_match'})
+            continue
+
+        liquidity = float(market.get('liquidity') or 0)
+        if liquidity < 1000:
+            skipped.append({'signal': signal, 'reason': f'liquidity_below_threshold:{liquidity:.0f}'})
+            continue
+
+        direction = _signal_side_to_direction(signal.get('side', ''))
+        price = _signal_price(signal, market)
+        market_type = classify_market(market.get('question', ''))
+        implied_probability = price if direction == 'YES' else 1 - price
+
+        data_sources = [
+            'latest_data.json:polymarket_markets',
+            'latest_data.json:outcome_prices',
+            'latest_data.json:liquidity',
+            'learned_rules.json:market_rules',
+            'learned_rules.json:price_rules',
+        ]
+
+        logic_chain = [
+            f"market_type={market_type} from market question classification",
+            f"selected direction={direction} from side={signal.get('side')}",
+            f"price={price} and implied_probability={implied_probability:.4f} from outcome_prices",
+            f"learned_rule_match={rule_match} from learned_rules.json",
+            f"liquidity={liquidity:.2f} passes minimum $1000 filter",
+            f"ev={signal.get('ev', signal.get('expected_value', 0))}, confidence={signal.get('confidence', 0)} from Agent B scoring",
+        ]
+
+        risk_notes = [
+            f"liquidity_risk: liquidity=${liquidity:.2f}; lower depth may increase slippage",
+            "strategy_risk: learned high-price NO rules can fail on long-tail sports outcomes",
+            "correlation_risk: related sports positions may move together",
+            f"time_risk: market end_date={market.get('end_date', 'unknown')}",
+        ]
+
+        market_evidence = {
+            'market_slug': slug,
+            'market_name': market.get('question'),
+            'direction': direction,
+            'price': price,
+            'expected_value': signal.get('ev', signal.get('expected_value', 0)),
+            'confidence': signal.get('confidence', 0),
+            'liquidity': liquidity,
+            'volume': market.get('volume'),
+            'outcomes': market.get('outcomes'),
+            'outcome_prices': market.get('outcome_prices'),
+            'learned_rule_match': rule_match,
+            'implied_probability': implied_probability,
+        }
+
+        enriched_signal = dict(signal)
+        enriched_signal.update({
+            'price': price,
+            'generated_at': generated_at,
+            'data_sources': data_sources,
+            'logic_chain': logic_chain,
+            'risk_notes': risk_notes,
+            'market_evidence': market_evidence,
+        })
+        enriched.append(enriched_signal)
+
+    return enriched, skipped
+
+
 def generate_enhanced_prompt(latest_data, learned_rules):
     """生成增强版 Prompt（集成学习规则）"""
     
@@ -182,6 +305,8 @@ def generate_enhanced_prompt(latest_data, learned_rules):
 3. 每个信号必须包含：市场、方向、价格、EV、置信度、学习规则匹配度
 4. 置信度 >= 70 才生成信号
 5. EV >= 8%
+6. 不要为没有真实市场数据或学习规则匹配的市场生成信号
+7. 每个信号必须可审计，并包含 data_sources、logic_chain、risk_notes、market_evidence、generated_at
 
 输出 JSON 格式：
 {{
@@ -193,7 +318,12 @@ def generate_enhanced_prompt(latest_data, learned_rules):
       "ev": 12.5,
       "confidence": 85,
       "learned_rule_match": "extreme_high_NHL",
-      "reason": "..."
+      "reason": "...",
+      "data_sources": ["latest_data.json:polymarket_markets", "learned_rules.json:price_rules"],
+      "logic_chain": ["..."],
+      "risk_notes": ["..."],
+      "market_evidence": {{"price": 0.95, "direction": "NO"}},
+      "generated_at": "ISO-8601"
     }}
   ]
 }}
@@ -218,6 +348,29 @@ def main():
     # 2a. 无 Polymarket 数据时早期退出，避免无效 LLM 调用
     if not latest_data.get('polymarket_markets'):
         log("ℹ️  无 Polymarket 市场数据，跳过情报研究")
+        with open(DATA_DIR / 'intelligence_report.json', 'w') as f:
+            json.dump({
+                'timestamp': datetime.now().isoformat(),
+                'status': 'skipped',
+                'reason': 'no_polymarket_markets',
+                'report': '无 Polymarket 市场数据，跳过情报研究',
+                'signals_count': 0,
+                'signals': []
+            }, f, indent=2, ensure_ascii=False)
+        return
+
+    polymarket_status = latest_data.get('polymarket_status')
+    if polymarket_status and polymarket_status != 'ok':
+        log(f"ℹ️  Polymarket 数据状态为 {polymarket_status}，跳过情报研究")
+        with open(DATA_DIR / 'intelligence_report.json', 'w') as f:
+            json.dump({
+                'timestamp': datetime.now().isoformat(),
+                'status': 'skipped',
+                'reason': f'polymarket_status={polymarket_status}',
+                'report': f'Polymarket 数据状态为 {polymarket_status}，跳过情报研究',
+                'signals_count': 0,
+                'signals': []
+            }, f, indent=2, ensure_ascii=False)
         return
 
     # 3. 生成增强 Prompt
@@ -244,7 +397,12 @@ def main():
             response = response.split('```')[1].split('```')[0].strip()
         
         result = json.loads(response)
-        signals = result.get('signals', [])
+        raw_signals = result.get('signals', [])
+        signals, skipped_signals = enrich_signals(raw_signals, latest_data, learned_rules)
+        if skipped_signals:
+            log(f"⚠️  跳过 {len(skipped_signals)} 个不可审计信号")
+            for item in skipped_signals[:5]:
+                log(f"  - {item['reason']}")
         
         # 6. 保存结果
         output = {
@@ -252,6 +410,8 @@ def main():
             'report': f"应用学习规则生成 {len(signals)} 个信号",
             'signals_count': len(signals),
             'signals': signals,
+            'raw_signals_count': len(raw_signals),
+            'skipped_signals': skipped_signals,
             'rejected_by_rules': len(rejected_markets)
         }
         
@@ -266,9 +426,12 @@ def main():
         with open(DATA_DIR / 'intelligence_report.json', 'w') as f:
             json.dump({
                 'timestamp': datetime.now().isoformat(),
+                'status': 'error',
+                'reason': 'llm_call_failed',
                 'report': f"执行失败: {e}",
-                'signals_count': 0
-            }, f, indent=2)
+                'signals_count': 0,
+                'signals': []
+            }, f, indent=2, ensure_ascii=False)
 
 if __name__ == '__main__':
     main()

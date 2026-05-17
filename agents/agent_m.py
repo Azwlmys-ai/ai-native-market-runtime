@@ -161,6 +161,133 @@ class AgentM:
         )
         return capped
 
+    def _deterministic_rejection(self, signal: dict, cls: dict):
+        """Fail closed before LLM for rules that must not be overridden."""
+        risk_rejection = self._risk_violation_rejection(signal)
+        if risk_rejection:
+            return risk_rejection
+
+        if cls["is_whitelist_extreme"]:
+            missing = []
+            if not signal.get("data_sources"):
+                missing.append("data_sources")
+            if not signal.get("logic_chain"):
+                missing.append("logic_chain")
+            if missing:
+                reason = (
+                    "白名单极端价格信号缺少可审计字段: "
+                    + ", ".join(missing)
+                    + "；拒绝，避免 NHL/NBA 等高价 NO 旧策略绕过风控。"
+                )
+                return {
+                    "market_id": signal.get("market_id"),
+                    "market_name": signal.get("market_name"),
+                    "signal": signal,
+                    "decision": "REJECT",
+                    "review": {
+                        "risk_points": [
+                            reason,
+                            "缺少数据源或逻辑链时，无法验证球队实力、伤病、赛程、赔率或外部统计依据。",
+                        ],
+                        "failure_probability": 100,
+                        "decision": "REJECT",
+                        "explanation": reason,
+                    },
+                    "reason": reason,
+                }
+        return None
+
+    def _risk_violation_rejection(self, signal: dict):
+        risk_file = self.base_dir / "data" / "risk_snapshot.json"
+        if not risk_file.exists():
+            return None
+
+        try:
+            risk_data = json.loads(risk_file.read_text())
+        except Exception:
+            return None
+
+        exposure = risk_data.get("exposure", {})
+        violations = exposure.get("violations", [])
+        if not violations:
+            return None
+
+        signal_theme = self._signal_theme_key(signal)
+        signal_text = " ".join([
+            str(signal.get("market_name", "")),
+            str(signal.get("market", "")),
+            str(signal.get("market_slug", "")),
+            str(signal.get("slug", "")),
+        ]).lower()
+
+        for violation in violations:
+            vtype = violation.get("type")
+            if vtype == "total_exposure":
+                reason = (
+                    f"账户总暴露 ${violation.get('value')} 已超过上限 "
+                    f"{self._format_limit_pct(violation.get('limit'))}；拒绝新增仓位。"
+                )
+                return self._reject_result(signal, reason, failure_probability=100)
+
+            if vtype == "single_theme_exposure" and violation.get("theme") == signal_theme:
+                reason = (
+                    f"主题 {signal_theme} 暴露 ${violation.get('value')} 已超过上限 "
+                    f"{self._format_limit_pct(violation.get('limit'))}；拒绝继续加仓相关市场。"
+                )
+                return self._reject_result(signal, reason, failure_probability=100)
+
+            asset = str(violation.get("asset", "")).lower()
+            if vtype == "single_asset_exposure" and asset and asset in signal_text:
+                reason = (
+                    f"标的 {violation.get('asset')} 暴露 ${violation.get('value')} 已超过上限 "
+                    f"{self._format_limit_pct(violation.get('limit'))}；拒绝继续加仓。"
+                )
+                return self._reject_result(signal, reason, failure_probability=100)
+
+        return None
+
+    @staticmethod
+    def _signal_theme_key(signal: dict) -> str:
+        text = " ".join([
+            str(signal.get("market_name", "")),
+            str(signal.get("market", "")),
+            str(signal.get("market_slug", "")),
+            str(signal.get("slug", "")),
+        ]).lower()
+
+        if "2028" in text and "democratic" in text and "presidential" in text:
+            return "2028_democratic_presidential_nomination"
+        if "nhl stanley cup" in text:
+            return "nhl_stanley_cup"
+        if "nba finals" in text:
+            return "nba_finals"
+        if "gta vi" in text:
+            return "gta_vi_related"
+        return signal.get("market_slug", signal.get("slug", "unknown"))
+
+    @staticmethod
+    def _reject_result(signal: dict, reason: str, failure_probability: int = 100):
+        return {
+            "market_id": signal.get("market_id"),
+            "market_name": signal.get("market_name"),
+            "signal": signal,
+            "decision": "REJECT",
+            "review": {
+                "risk_points": [reason],
+                "failure_probability": failure_probability,
+                "decision": "REJECT",
+                "explanation": reason,
+            },
+            "reason": reason,
+        }
+
+    @staticmethod
+    def _format_limit_pct(value):
+        try:
+            return f"{float(value):.0%}"
+        except (TypeError, ValueError):
+            return str(value)
+
     # ------------------------------------------------------------------
 
     def review_signal(self, signal):
@@ -174,6 +301,11 @@ class AgentM:
 
         # FIX_PLAN #9: 仓位上限预处理（白名单/套利 position>=20% → 降至 19%）
         signal = self._preprocess_signal(signal, cls)
+
+        deterministic = self._deterministic_rejection(signal, cls)
+        if deterministic:
+            self.log(f"⛔ 硬规则拒绝: {market[:60]} - {deterministic['reason']}")
+            return deterministic
 
         # 检查缓存
         cached_result = self.cache.get(signal)
@@ -258,13 +390,9 @@ class AgentM:
     - 逻辑链不完整或推理不合理
 
 特殊规则（白名单市场 + 极端价格）：
-{'⚠️  重要：以下规则覆盖上方所有通用 REJECT 条件，必须优先执行。' if is_whitelist_extreme else ''}
 {'✅ 当前信号属于白名单市场（NHL/NBA/MLB/NFL）且价格极端（NO >= 0.85 或 YES <= 0.15）' if is_whitelist_extreme else ''}
-{'对于此类信号，只要满足以下 3 个条件，必须输出 APPROVE（不得因 EV > 100%、仓位、数据源不够直接等通用规则拒绝）：' if is_whitelist_extreme else ''}
-{'1. 数据源来自官方体育平台（NHL.com、NBA.com、ESPN、体育统计网站等）即视为合格，不要求与单一标的一一对应。' if is_whitelist_extreme else ''}
-{'2. 常识逻辑即为有效逻辑链（"99% 概率不夺冠的弱队"本身就是完整推理，无需精确 EV 量化）。' if is_whitelist_extreme else ''}
-{'3. 仓位已预处理至 ≤ 19%，不得以仓位为由拒绝。' if is_whitelist_extreme else ''}
-{'若以上 3 条均满足，直接 APPROVE；failure_probability 设为市场隐含的失败概率（通常 < 30%）。' if is_whitelist_extreme else ''}
+{'此类信号仍必须满足 data_sources 和 logic_chain 可审计要求；不得仅凭“高价 NO/低价 YES”直接 APPROVE。' if is_whitelist_extreme else ''}
+{'如果数据源和逻辑链完整，可在仓位已预处理至 ≤ 19% 的前提下继续评估；否则必须 REJECT。' if is_whitelist_extreme else ''}
 
 特殊规则（跨平台套利）：
 {'✅ 当前信号为跨平台套利（ARBITRAGE），应用以下宽松标准：' if is_arbitrage else ''}

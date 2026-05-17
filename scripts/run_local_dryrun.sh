@@ -18,22 +18,23 @@ export PATH="$VENV/bin:$PATH"
 # ── 3. 项目根加入 PYTHONPATH（兼容直接调用场景）──────────────────
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
-# ── 4. 确认 mock pm-trader 可执行 ───────────────────────────────
-if [ ! -x "$PM_TRADER_PATH" ]; then
-    cat > "$PM_TRADER_PATH" <<'EOF'
+# ── 4. 写入 mock pm-trader（每次覆盖，避免旧坏文件污染 dry-run） ──────────
+cat > "$PM_TRADER_PATH" <<'EOF'
 #!/bin/sh
 case "$1" in
   balance)
-    printf '{"ok":true,"data":{"total_value":0,"pnl":0}}\n'
+    printf '{"ok":true,"data":{"total_value":0,"cash":0,"pnl":0}}\n'
+    ;;
+  portfolio)
+    printf '{"ok":true,"data":[]}\n'
     ;;
   *)
     printf '{"ok":true,"dry_run":true}\n'
     ;;
 esac
 EOF
-    chmod +x "$PM_TRADER_PATH"
-    echo "[run_local_dryrun] Created mock pm-trader at $PM_TRADER_PATH"
-fi
+chmod +x "$PM_TRADER_PATH"
+echo "[run_local_dryrun] Refreshed mock pm-trader at $PM_TRADER_PATH"
 
 # ── 5. 打印运行环境摘要 ───────────────────────────────────────────
 echo "============================================================"

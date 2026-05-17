@@ -165,6 +165,9 @@ class RiskEngine:
             "violations": [],
         }
 
+        by_theme = {}
+        total_exposure = 0.0
+
         pos_file = self.data_dir / "positions.json"
         if pos_file.exists():
             try:
@@ -172,10 +175,13 @@ class RiskEngine:
                 exposures["positions_count"] = len(positions)
                 for p in positions:
                     slug = p.get("market_slug", p.get("slug", "unknown"))
-                    size = p.get("position_size", p.get("amount_usd", 0))
+                    size = self._position_exposure_usd(p)
+                    theme = self._theme_key(p)
                     if slug not in exposures["by_asset"]:
                         exposures["by_asset"][slug] = 0.0
-                    exposures["by_asset"][slug] += float(size)
+                    exposures["by_asset"][slug] += size
+                    by_theme[theme] = by_theme.get(theme, 0.0) + size
+                    total_exposure += size
                     if exposures["by_asset"][slug] > limits["max_single_asset_pct"] * 10000:
                         exposures["violations"].append({
                             "type": "single_asset_exposure",
@@ -186,8 +192,60 @@ class RiskEngine:
             except Exception:
                 pass
 
+        for theme, value in sorted(by_theme.items()):
+            if value > limits["max_single_theme_pct"] * 10000:
+                exposures["violations"].append({
+                    "type": "single_theme_exposure",
+                    "theme": theme,
+                    "value": round(value, 2),
+                    "limit": limits["max_single_theme_pct"],
+                })
+
+        if total_exposure > limits["max_total_exposure_pct"] * 10000:
+            exposures["violations"].append({
+                "type": "total_exposure",
+                "value": round(total_exposure, 2),
+                "limit": limits["max_total_exposure_pct"],
+            })
+
+        exposures["by_asset"] = {k: round(v, 2) for k, v in exposures["by_asset"].items()}
+        exposures["by_theme"] = {k: round(v, 2) for k, v in sorted(by_theme.items())}
+        exposures["total_exposure"] = round(total_exposure, 2)
         exposures["limits"] = limits
         return exposures
+
+    @staticmethod
+    def _position_exposure_usd(position):
+        """Return USD exposure for both old signal-style and pm-trader position rows."""
+        for key in ("current_value", "total_cost", "amount_usd", "position_size"):
+            value = position.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return 0.0
+
+    @staticmethod
+    def _theme_key(position):
+        text = " ".join([
+            str(position.get("market_question", "")),
+            str(position.get("market_slug", "")),
+            str(position.get("market_name", "")),
+        ]).lower()
+
+        if "2028" in text and "democratic" in text and "presidential" in text:
+            return "2028_democratic_presidential_nomination"
+        if "nhl stanley cup" in text:
+            return "nhl_stanley_cup"
+        if "nba finals" in text:
+            return "nba_finals"
+        if "gta vi" in text:
+            return "gta_vi_related"
+        return position.get("market_slug", position.get("slug", "unknown"))
 
     def calc_var_placeholder(self, price_series):
         """Basic VaR with fallback label."""
