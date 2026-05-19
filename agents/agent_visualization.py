@@ -120,6 +120,27 @@ def summarize_signals(raw: Any) -> dict[str, Any]:
     }
 
 
+def detail_signals(raw: Any) -> list[dict[str, Any]]:
+    signals = as_list(raw)
+    return [
+        {
+            "market_id": item.get("market_id"),
+            "market_name": item.get("market_name") or item.get("market"),
+            "market_slug": item.get("market_slug"),
+            "direction": item.get("direction"),
+            "price": item.get("price"),
+            "position_size": item.get("position_size"),
+            "expected_value": item.get("expected_value"),
+            "confidence": item.get("confidence"),
+            "source": item.get("source"),
+            "generated_at": item.get("generated_at") or item.get("timestamp"),
+            "reason": item.get("reason"),
+            "risk_notes": item.get("risk_notes"),
+        }
+        for item in signals
+    ]
+
+
 def summarize_review(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {"total": 0, "approved": 0, "rejected": 0}
@@ -135,6 +156,35 @@ def summarize_review(raw: Any) -> dict[str, Any]:
         "approved_paper": raw.get("approved_paper", 0),
         "rejected_real": raw.get("rejected_real", 0),
         "rejected_paper": raw.get("rejected_paper", 0),
+    }
+
+
+def detail_review(raw: Any) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(raw, dict):
+        return {"approved_signals": [], "rejected_signals": []}
+
+    def normalize(items: Any) -> list[dict[str, Any]]:
+        rows = []
+        for item in as_list(items):
+            signal = item.get("signal") if isinstance(item.get("signal"), dict) else {}
+            rows.append(
+                {
+                    "market_id": item.get("market_id") or signal.get("market_id"),
+                    "market_name": item.get("market_name") or signal.get("market_name") or signal.get("market"),
+                    "direction": signal.get("direction"),
+                    "expected_value": signal.get("expected_value"),
+                    "confidence": signal.get("confidence"),
+                    "decision": item.get("decision"),
+                    "review": item.get("review"),
+                    "reason": item.get("reason"),
+                    "source": signal.get("source"),
+                }
+            )
+        return rows
+
+    return {
+        "approved_signals": normalize(raw.get("approved_signals")),
+        "rejected_signals": normalize(raw.get("rejected_signals")),
     }
 
 
@@ -158,6 +208,28 @@ def summarize_execution(raw: Any) -> dict[str, Any]:
     }
 
 
+def detail_execution(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return []
+
+    rows = []
+    for item in as_list(raw.get("results")):
+        signal = item.get("signal") if isinstance(item.get("signal"), dict) else {}
+        rows.append(
+            {
+                "status": item.get("status"),
+                "timestamp": item.get("timestamp"),
+                "market_id": signal.get("market_id"),
+                "market_name": signal.get("market_name") or signal.get("market"),
+                "direction": signal.get("direction"),
+                "expected_value": signal.get("expected_value"),
+                "confidence": signal.get("confidence"),
+                "source": signal.get("source"),
+            }
+        )
+    return rows
+
+
 def summarize_logs() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     log_files = sorted(LOGS_DIR.glob("*.log"), key=lambda item: item.stat().st_mtime, reverse=True)
     summaries: list[dict[str, Any]] = []
@@ -178,6 +250,7 @@ def summarize_logs() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                 level_counts["info"] += 1
 
         stat = path.stat()
+        recent_lines = [line.strip()[:300] for line in lines[-8:] if line.strip()]
         summaries.append(
             {
                 "file": str(path.relative_to(ROOT)),
@@ -185,6 +258,7 @@ def summarize_logs() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
                 "recent_line_count": len(lines),
                 "level_counts": dict(level_counts),
+                "recent_lines": recent_lines,
             }
         )
         for line in lines[-5:]:
@@ -203,8 +277,11 @@ def build_state() -> dict[str, Any]:
     return {
         "timestamp": utc_now(),
         "signals_summary": summarize_signals(signals),
+        "signal_details": detail_signals(signals),
         "review_summary": summarize_review(review),
+        "review_details": detail_review(review),
         "execution_summary": summarize_execution(execution),
+        "execution_details": detail_execution(execution),
         "agent_log_summary": log_summary,
         "recent_runtime_events": recent_events,
     }
