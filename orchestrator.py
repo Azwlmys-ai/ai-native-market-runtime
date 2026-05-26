@@ -9,8 +9,10 @@ import sys
 import time
 import asyncio
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
+from event_logger import write_event
+from paper_pnl import get_paper_portfolio
 
 try:
     import fcntl
@@ -49,6 +51,18 @@ class Orchestrator:
         if not self._acquire_run_lock():
             self.log("⏭️  已有扫描周期在运行，本次启动跳过")
             return
+
+        cycle_id = (
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+            f"_pid{os.getpid()}"
+        )
+        mode = "dry_run" if os.environ.get("EXECUTOR_DRY_RUN", "").lower() in ("1", "true", "yes") else "live"
+        write_event(
+            cycle_id=cycle_id,
+            type="orchestrator.cycle_started",
+            agent="orchestrator",
+            payload={"mode": mode},
+        )
 
         self.log("=" * 60)
         self.log("开始新的扫描周期")
@@ -150,6 +164,14 @@ class Orchestrator:
             self.log("步骤 16/16: 卖出执行")
             self._execute_sell_signals()
             
+            # ---- Paper P&L 快照 ----
+            try:
+                pp = get_paper_portfolio()
+                summary = pp.snapshot()
+                self.log(f"📊 Paper P&L 快照: {pp.report()}")
+            except Exception as e:
+                self.log(f"⚠️  Paper P&L 快照失败: {e}")
+
             # 第 17 步：交易复盘（Agent G）
             self.log("步骤 17/18: 交易复盘 (Agent G)")
             self._run_agent("agent_g")
@@ -159,9 +181,21 @@ class Orchestrator:
             self._run_agent("agent_i")
             
             self.log("✅ 扫描周期完成")
+            write_event(
+                cycle_id=cycle_id,
+                type="orchestrator.cycle_completed",
+                agent="orchestrator",
+                payload={"status": "success"},
+            )
         
         except Exception as e:
             self.log(f"❌ 扫描周期失败: {e}")
+            write_event(
+                cycle_id=cycle_id,
+                type="orchestrator.cycle_completed",
+                agent="orchestrator",
+                payload={"status": "failed", "error": str(e)},
+            )
         finally:
             self._release_run_lock()
 

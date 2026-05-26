@@ -7,10 +7,11 @@ Agent M - 风险审查员（弹性负载均衡）
 """
 
 import json
+import os
 import sys
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 添加父目录到路径
@@ -18,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from _paths import get_base_dir
 from llm_helper import call_llm_sync
 from review_cache import ReviewCache
+from event_logger import write_event
 
 class AgentM:
     def __init__(self, base_dir=None, batch_file=None, output_file=None):
@@ -504,11 +506,30 @@ class AgentM:
         approved = []
         rejected = []
 
+        cycle_id = os.environ.get("PA_CYCLE_ID", f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
+
         for result in results:
-            if result["decision"] == "APPROVE":
+            decision = result["decision"]
+            if decision == "APPROVE":
                 approved.append(result)
             else:
                 rejected.append(result)
+
+            # Emit runtime review/risk event
+            signal = result.get("signal", {})
+            event_type = "signal.reviewed" if decision == "APPROVE" else "risk.rejected"
+            write_event(
+                cycle_id=cycle_id,
+                type=event_type,
+                agent="agent_m",
+                payload={
+                    "decision": decision,
+                    "market_id": signal.get("market_id", ""),
+                    "market_name": signal.get("market_name", ""),
+                    "direction": signal.get("direction", ""),
+                    "review": result.get("review", {}),
+                },
+            )
 
         def _is_paper(sig: dict) -> bool:
             return sig.get("paper", False) or str(sig.get("source", "")).startswith("paper")

@@ -7,11 +7,13 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
+from event_logger import write_event
+from paper_pnl import get_paper_portfolio
 
 class SignalExecutor:
     def __init__(self, base_dir=None):
@@ -26,6 +28,22 @@ class SignalExecutor:
     def log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] [Signal Executor] {message}")
+
+    def _write_paper_trade(self, signal: dict, cycle_id: str) -> None:
+        trade = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "cycle_id": cycle_id,
+            "market_id": signal.get("market_id", ""),
+            "side": signal.get("direction", ""),
+            "entry_price": float(signal.get("price", 0) or 0),
+            "size": float(signal.get("position_size", 0) or 0),
+            "source_agent": signal.get("source", ""),
+            "execution_type": "paper",
+        }
+        trades_file = self.data_dir / "paper_trades.jsonl"
+        with open(trades_file, "a") as f:
+            json.dump(trade, f, ensure_ascii=False)
+            f.write("\n")
     
     def load_approved_signals(self):
         """加载通过审查的信号"""
@@ -63,6 +81,26 @@ class SignalExecutor:
 
         if os.environ.get("EXECUTOR_DRY_RUN", "").lower() in ("1", "true", "yes"):
             self.log(f"[DRY_RUN] would execute: {market_id} {direction} size={position_size}")
+            cycle_id = os.environ.get("PA_CYCLE_ID", f"exec_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
+            write_event(
+                cycle_id=cycle_id,
+                type="execution.dry_run",
+                agent="signal_executor",
+                payload={
+                    "market_id": signal.get("market_id", ""),
+                    "market_name": signal.get("market_name", ""),
+                    "direction": signal.get("direction", ""),
+                    "position_size": position_size,
+                    "source": signal.get("source", ""),
+                },
+            )
+            self._write_paper_trade(signal, cycle_id)
+            # 记录虚拟持仓到 PaperPortfolio
+            try:
+                pp = get_paper_portfolio()
+                pp.open_position(signal)
+            except Exception as e:
+                self.log(f"⚠️ paper_pnl 记录失败: {e}")
             return {
                 "status": "dry_run",
                 "signal": signal,
@@ -159,6 +197,13 @@ class SignalExecutor:
         
         if not signals:
             self.log("ℹ️  无待执行信号")
+            cycle_id = os.environ.get("PA_CYCLE_ID", f"exec_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
+            write_event(
+                cycle_id=cycle_id,
+                type="execution.skipped",
+                agent="signal_executor",
+                payload={"reason": "no_signals"},
+            )
             output_file = self._write_execution_results(
                 total=0,
                 success_count=0,

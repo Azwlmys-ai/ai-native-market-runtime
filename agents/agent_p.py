@@ -12,6 +12,34 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
 
+_DEFAULT_STOP_LOSS = -0.10
+
+
+def normalize_stop_loss(value, default=_DEFAULT_STOP_LOSS):
+    """将 stop_loss 归一化为 float。
+
+    兼容来源：
+    - float / int：直接返回
+    - dict：按优先级尝试 value / pct / percent / stop_loss /
+            stop_loss_pct / threshold / max / min
+    - None 或非法类型：返回 default 并打印 WARNING
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
+        for key in ("value", "pct", "percent", "stop_loss",
+                    "stop_loss_pct", "threshold", "max", "min"):
+            candidate = value.get(key)
+            if isinstance(candidate, (int, float)):
+                return float(candidate)
+        print(f"[Agent P] WARNING: stop_loss dict 无可用数值字段 {value!r}，"
+              f"使用默认值 {default}")
+        return default
+    print(f"[Agent P] WARNING: stop_loss 类型非法 "
+          f"({type(value).__name__}: {value!r})，使用默认值 {default}")
+    return default
+
+
 class AgentP:
     def __init__(self, base_dir=None):
         self.base_dir = Path(base_dir) if base_dir else get_base_dir()
@@ -155,7 +183,8 @@ class AgentP:
                 take_profit = take_profit_range.get("max", default_take_profit)
                 
                 # 根据置信度设置止损（这里简化处理，使用中等置信度）
-                stop_loss = strategy_config.get("stop_loss", {}).get("medium_confidence", default_stop_loss)
+                raw_stop_loss = strategy_config.get("stop_loss", {}).get("medium_confidence", default_stop_loss)
+                stop_loss = normalize_stop_loss(raw_stop_loss, default=default_stop_loss)
                 
                 # 获利回撤参数
                 trailing_config = strategy_config.get("trailing_stop", {})

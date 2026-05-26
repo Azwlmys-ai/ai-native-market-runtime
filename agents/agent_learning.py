@@ -13,7 +13,21 @@ from collections import defaultdict
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from llm_helper import call_llm_sync
+from llm_helper import call_llm, load_llm_config
+
+DEFAULT_MODEL = "deepseek-v4-pro"
+
+
+def _get_model_for_agent_learning() -> str:
+    """从 config/llm_config.json 的 agent_models 读取 agent_learning 专属模型名。
+    如果缺失，回退到统一默认模型 deepseek-v4-pro。
+    """
+    try:
+        config = load_llm_config()
+        agent_models = config.get("agent_models", {})
+        return agent_models.get("agent_learning", DEFAULT_MODEL)
+    except Exception:
+        return DEFAULT_MODEL
 
 def load_training_data():
     """加载训练集"""
@@ -146,49 +160,69 @@ def learn_from_history():
     # 3. 调用 LLM 学习
     print("\n3️⃣ 调用 LLM 学习决策规则...")
     prompt = generate_learning_prompt(trades, patterns)
-    
-    response_text = call_llm_sync(
-        agent_id='agent_d',  # 使用 Agent D 的 deepseek-r1 配置
-        prompt=prompt,
-        timeout=120,
-        temperature=0.1
-    )
-    
-    response = {'content': response_text}
-    
+
+    _model = _get_model_for_agent_learning()
+    learned_rules = None
+    raw_response = None
+    llm_available = True
+    fallback_used = False
+
+    try:
+        response_text = call_llm(
+            prompt=prompt,
+            model=_model,
+            temperature=0.1,
+            max_tokens=4000,
+            timeout=120,
+        )
+        raw_response = response_text
+    except Exception as e:
+        print(f"   ⚠️  LLM 调用失败: {e}")
+        llm_available = False
+        fallback_used = True
+
     # 4. 解析学习结果
     print("\n4️⃣ 解析学习结果...")
+    if llm_available and raw_response:
+        try:
+            content = raw_response
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0].strip()
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0].strip()
+
+            learned_rules = json.loads(content)
+        except Exception as e:
+            print(f"   ❌ 解析失败: {e}")
+            print(f"\n原始响应:\n{raw_response[:500]}")
+            learned_rules = None
+
+    if learned_rules is None:
+        # Structured learning_skipped fallback
+        learned_rules = {"learning_skipped": True, "fallback_used": True, "reason": "LLM unavailable or parse error"}
+
+    # 5. 保存学习结果
+    output = {
+        'timestamp': datetime.now().isoformat(),
+        'training_size': len(trades),
+        'learned_rules': learned_rules,
+        'raw_response': raw_response,
+        'llm_available': llm_available,
+        'fallback_used': fallback_used,
+    }
+
     try:
-        # 提取 JSON（可能包含在 markdown 代码块中）
-        content = response['content']
-        if '```json' in content:
-            content = content.split('```json')[1].split('```')[0].strip()
-        elif '```' in content:
-            content = content.split('```')[1].split('```')[0].strip()
-        
-        learned_rules = json.loads(content)
-        
-        # 5. 保存学习结果
-        output = {
-            'timestamp': datetime.now().isoformat(),
-            'training_size': len(trades),
-            'learned_rules': learned_rules,
-            'raw_response': response['content']
-        }
-        
+        Path('data').mkdir(exist_ok=True)
         with open('data/learned_rules.json', 'w') as f:
             json.dump(output, f, indent=2)
-        
-        print("   ✅ 学习完成")
-        print(f"\n📋 学习到的规则:")
-        print(json.dumps(learned_rules, indent=2, ensure_ascii=False))
-        
-        return learned_rules
-        
     except Exception as e:
-        print(f"   ❌ 解析失败: {e}")
-        print(f"\n原始响应:\n{response['content']}")
-        return None
+        print(f"   ⚠️  保存结果失败: {e}")
+
+    print("   ✅ 学习完成")
+    print(f"\n📋 学习到的规则:")
+    print(json.dumps(learned_rules, indent=2, ensure_ascii=False))
+
+    return learned_rules
 
 if __name__ == '__main__':
     learn_from_history()

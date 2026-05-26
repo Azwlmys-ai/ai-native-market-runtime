@@ -59,6 +59,19 @@ class AgentG:
             return True
         return os.environ.get("EXECUTOR_DRY_RUN", "0") == "1"
 
+    def _get_llm_model(self) -> str:
+        """从 config/llm_config.json 的 agent_models 读取 agent_g 专属模型名。
+        如果缺失，回退到统一默认模型 deepseek-v4-pro。
+        """
+        _default_model = "deepseek-v4-pro"
+        try:
+            from llm_helper import load_llm_config
+            config = load_llm_config()
+            agent_models = config.get("agent_models", {})
+            return agent_models.get("agent_g", _default_model)
+        except Exception:
+            return _default_model
+
     def _generate_mock_trade_history(self) -> list:
         """在 dry-run 模式下生成合成交易历史，供学习循环使用。
 
@@ -318,9 +331,10 @@ class AgentG:
         try:
             if call_llm is None:
                 raise RuntimeError(f"LLM helper unavailable: {_LLM_IMPORT_ERROR}")
+            _model = self._get_llm_model()
             response = call_llm(
                 prompt=prompt,
-                model="gpt-5.4-mini",
+                model=_model,
                 temperature=0.3,
                 max_tokens=2000,
                 timeout=LLM_TIMEOUT_SECONDS,
@@ -517,9 +531,10 @@ class AgentG:
         try:
             if call_llm is None:
                 raise RuntimeError(f"LLM helper unavailable: {_LLM_IMPORT_ERROR}")
+            _model = self._get_llm_model()
             response = call_llm(
                 prompt=prompt,
-                model="deepseek-r1",
+                model=_model,
                 temperature=0.3,
                 max_tokens=4000,
                 timeout=LLM_TIMEOUT_SECONDS,
