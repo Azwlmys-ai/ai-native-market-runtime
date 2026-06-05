@@ -5,15 +5,17 @@ Agent B Enhanced - 集成学习到的策略规则
 """
 
 import json
+import os
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from llm_helper import call_llm_sync
 from _paths import get_base_dir
+from event_logger import write_event
 
 
 BASE_DIR = get_base_dir()
@@ -307,6 +309,10 @@ def generate_enhanced_prompt(latest_data, learned_rules):
 5. EV >= 8%
 6. 不要为没有真实市场数据或学习规则匹配的市场生成信号
 7. 每个信号必须可审计，并包含 data_sources、logic_chain、risk_notes、market_evidence、generated_at
+8. 【研究假设，Phase 3c-2】每个信号还必须给出两项，把交易当作可证伪的假设：
+   - holding_horizon_days：你判断的预期持仓天数（整数，结合市场到期时间与论点兑现节奏）
+   - failure_conditions：针对该市场逐条推理的失败条件，即"在什么具体情况下这个判断会被证伪"
+     （字符串数组；要具体到该市场，不要泛泛而谈，如"若 X 队进入季后赛""若结算前流动性跌破 $Y"）
 
 输出 JSON 格式：
 {{
@@ -323,6 +329,8 @@ def generate_enhanced_prompt(latest_data, learned_rules):
       "logic_chain": ["..."],
       "risk_notes": ["..."],
       "market_evidence": {{"price": 0.95, "direction": "NO"}},
+      "holding_horizon_days": 27,
+      "failure_conditions": ["若该长尾事件在到期前出现实质进展", "若结算前市场流动性枯竭导致无法平仓"],
       "generated_at": "ISO-8601"
     }}
   ]
@@ -419,6 +427,23 @@ def main():
             json.dump(output, f, indent=2, ensure_ascii=False)
         
         log(f"✅ 生成 {len(signals)} 个信号")
+
+        # Emit runtime event for each generated signal
+        cycle_id = os.environ.get("PA_CYCLE_ID", f"signal_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
+        for sig in signals:
+            write_event(
+                cycle_id=cycle_id,
+                type="signal.generated",
+                agent="agent_b",
+                payload={
+                    "market_id": sig.get("market_id", ""),
+                    "market_name": sig.get("market_name", ""),
+                    "direction": sig.get("direction", ""),
+                    "price": sig.get("price", 0.5),
+                    "confidence": sig.get("confidence", 70),
+                    "source": sig.get("source", "agent_b"),
+                },
+            )
         
     except Exception as e:
         log(f"❌ 执行失败: {e}")

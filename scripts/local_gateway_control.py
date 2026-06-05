@@ -296,10 +296,13 @@ def cmd_status(telegram=False):
     ap_cnt = len(ap) if isinstance(ap, list) else "?"
     if rr:
         approved = rr.get("approved", 0)
+        paper_probe = rr.get("paper_probe", 0)   # Agent M 三级：小仓试错
         rejected = rr.get("rejected", 0)
-        lines.append(f"📡 信号: {sig_cnt} 条  审查通过:{approved} 拒绝:{rejected}  待执行:{ap_cnt}")
-        if approved == 0 and er and er.get("total", 0) == 0:
-            lines.append("  • 执行 total=0 是因为无审查通过信号，不是去重/持仓限制")
+        lines.append(
+            f"📡 信号: {sig_cnt} 条  审查通过:{approved} 试错:{paper_probe} 拒绝:{rejected}  待执行:{ap_cnt}"
+        )
+        if approved == 0 and paper_probe == 0 and er and er.get("total", 0) == 0:
+            lines.append("  • 执行 total=0 是因为无审查通过/试错信号，不是去重/持仓限制")
     else:
         lines.append(f"📡 信号: {sig_cnt} 条  待执行:{ap_cnt}")
 
@@ -398,7 +401,7 @@ def cmd_metrics(telegram=False):
     if rr:
         lines.append(
             f"信号:{len(sigs) if sigs is not None else '?'}  "
-            f"审查通过:{rr.get('approved', 0)}  拒绝:{rr.get('rejected', 0)}  "
+            f"审查通过:{rr.get('approved', 0)}  试错:{rr.get('paper_probe', 0)}  拒绝:{rr.get('rejected', 0)}  "
             f"待执行:{len(ap) if isinstance(ap,list) else '?'}"
         )
     else:
@@ -425,8 +428,12 @@ def cmd_live_readiness(telegram=False):
         blockers.append("调度脚本强制 EXECUTOR_DRY_RUN=1，真实交易关闭")
     if mode["stop_trading"]:
         blockers.append("STOP_TRADING 文件存在")
-    if rr.get("approved", 0) == 0:
-        warnings.append("Agent M 当前审查通过=0，买入侧即使 live 也无单可下")
+    if rr.get("approved", 0) == 0 and rr.get("paper_probe", 0) == 0:
+        warnings.append("Agent M 当前审查通过/试错=0，买入侧即使 live 也无单可下")
+    elif rr.get("approved", 0) == 0 and rr.get("paper_probe", 0) > 0:
+        warnings.append(
+            f"Agent M 当前 通过=0、试错={rr.get('paper_probe', 0)}（小仓试错，仍模拟盘，不下真实单）"
+        )
     if pending_sell:
         warnings.append(
             f"存在待卖出信号 {pending_sell['total']} 条，其中 urgent={pending_sell['urgent']}"
@@ -446,7 +453,9 @@ def cmd_live_readiness(telegram=False):
         lines.append(f"调度: {', '.join(mode['schedule'])}")
     lines.append(f"买入: total={er.get('total', 0)} success={er.get('success', 0)} dry={er.get('dry_run', 0)}")
     lines.append(f"卖出: total={ser.get('total', 0)} success={ser.get('success', 0)} dry={ser.get('dry_run', 0)} failed={ser.get('failed', 0)}")
-    lines.append(f"审查: approved={rr.get('approved', 0)} rejected={rr.get('rejected', 0)}")
+    lines.append(
+        f"审查: 通过={rr.get('approved', 0)} 试错={rr.get('paper_probe', 0)} 拒绝={rr.get('rejected', 0)}"
+    )
 
     if blockers:
         lines.append("阻断:")
@@ -627,7 +636,7 @@ def cmd_run_status(telegram=False):
     orch = _read_json("data/orchestrator_status.json")
     if orch:
         lines.append(
-            f"orchestrator:{orch.get('state','?')}  step:{str(orch.get('current_step') or '-')[:70]}"
+            f"调度:{orch.get('state','?')}  步骤:{str(orch.get('current_step') or '-')[:70]}"
         )
         lines.append(f"last:{str(orch.get('last_log') or '-')[:90]}")
 
@@ -643,6 +652,184 @@ def cmd_run_status(telegram=False):
 
 # ─── 主入口 ──────────────────────────────────────────────────────────────────
 
+def _read_jsonl_tail(path, n):
+    """读 jsonl 末 n 条（最近优先）。只读，缺文件返回 []。"""
+    p = ROOT / path
+    if not p.exists():
+        return []
+    rows = []
+    try:
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return list(reversed(rows[-n:]))
+
+
+def _as_list(v):
+    if not v:
+        return []
+    if isinstance(v, list):
+        return v
+    try:
+        d = json.loads(v)
+        return d if isinstance(d, list) else [v]
+    except Exception:
+        return [v]
+
+
+def cmd_hypotheses(telegram=False):
+    """Agent B 研究假设（PRD Mobile：当前 hypothesis）。只读 data/hypotheses.jsonl。"""
+    n = 5 if telegram else 12
+    rows = _read_jsonl_tail("data/hypotheses.jsonl", n)
+    lines = ["🔬 研究假设 (Agent B)"]
+    if not rows:
+        lines.append("  暂无假设（等一轮 Agent B 产出）")
+        result = "\n".join(lines)
+        return _cap(result) if telegram else result
+    for h in rows:
+        src = "原生" if h.get("source") == "agent_b" else "派生"
+        name = str(h.get("market_name") or h.get("canonical_market_id") or "?")[:50]
+        lines.append(f"• {name} [{src}]")
+        lines.append(
+            f"  方向 {h.get('direction','?')} 置信 {h.get('confidence','?')} "
+            f"边 {h.get('expected_edge','?')} 持仓 {h.get('holding_horizon_days','?')}天"
+        )
+        fc = _as_list(h.get("failure_conditions"))
+        if fc:
+            lines.append(f"  失败条件: {str(fc[0])[:80]}")
+    result = "\n".join(lines)
+    return _cap(result) if telegram else result
+
+
+# 3c-2 失败条件对照 verdict → 短标签（no_prediction 不展示）
+_VERDICT_LABEL = {
+    "confirmed": "假设成立",
+    "refuted": "假设证伪",
+    "loss_unexplained": "亏损·预测外",
+    "inconclusive": "无定论",
+}
+
+
+def _load_postmortems_dedup(scan=100_000):
+    """读 postmortems.jsonl 并按 postmortem_uid 去重（latest wins）。
+
+    jsonl 是 append-only 事实源，逐周期累积同一笔复盘的多版本；去重还原 canonical 笔数，
+    避免计数膨胀（实测 108 行 → 16 笔）。返回最近优先的去重列表。
+    """
+    raw_rows = _read_jsonl_tail("data/postmortems.jsonl", scan)  # 已最近优先
+    seen = set()
+    out = []
+    for p in raw_rows:
+        uid = p.get("postmortem_uid")
+        key = uid if uid is not None else id(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _clean_market_name(p):
+    """展示用市场名：优先 market_name；退回 canonical_market_id，剥掉 slug:/q: 临时键前缀。"""
+    name = str(p.get("market_name") or "").strip()
+    if not name:
+        cid = str(p.get("canonical_market_id") or "?")
+        if cid.startswith("slug:"):
+            cid = cid[5:]
+        elif cid.startswith("q:"):
+            cid = "(未命名市场)"
+        name = cid
+    return name[:46]
+
+
+def cmd_postmortems(telegram=False):
+    """Agent G 复盘 / 最近失败原因（PRD Mobile：最近失败原因）。只读 data/postmortems.jsonl。
+
+    postmortems.jsonl 是 append-only 事实源，逐周期累积同一笔复盘的多版本；
+    这里按 postmortem_uid 去重（latest wins）还原 canonical 笔数，避免计数膨胀。
+    """
+    n = 5 if telegram else 15
+    all_rows = _load_postmortems_dedup()
+    rows = all_rows[:n]
+    win = sum(1 for p in all_rows if p.get("outcome") == "win")
+    loss = sum(1 for p in all_rows if p.get("outcome") == "loss")
+    flat = sum(1 for p in all_rows if p.get("outcome") == "flat")
+    # 3c-2：失败条件对照计数（证伪/亏损预测外是高价值信号）
+    refuted = sum(1 for p in all_rows if p.get("hypothesis_verdict") == "refuted")
+    unexpl = sum(1 for p in all_rows if p.get("hypothesis_verdict") == "loss_unexplained")
+    head = f"🧾 复盘 (Agent G)  盈:{win} 亏:{loss} 平:{flat}"
+    if refuted or unexpl:
+        head += f"  | 对照 证伪:{refuted} 预测外:{unexpl}"
+    lines = [head]
+    if not rows:
+        lines.append("  暂无复盘")
+        result = "\n".join(lines)
+        return _cap(result) if telegram else result
+    _oc = {"win": "盈", "loss": "亏", "flat": "平"}
+    for p in rows:
+        name = _clean_market_name(p)
+        pnl = p.get("realized_pnl")
+        pnl_s = f" {pnl:+.1f}" if isinstance(pnl, (int, float)) else ""
+        verdict = p.get("hypothesis_verdict")
+        vlabel = _VERDICT_LABEL.get(verdict, "")
+        flags = "".join([
+            f"[{vlabel}]" if vlabel else "",
+            "[流动性]" if p.get("liquidity_issue") else "",
+            "[时机]" if p.get("timing_issue") else "",
+            "[模型]" if p.get("model_issue") else "",
+        ])
+        lines.append(f"• {name} {_oc.get(p.get('outcome'), p.get('outcome','?'))}{pnl_s} {flags}")
+        fr = p.get("failure_reason")
+        if fr:
+            lines.append(f"  {str(fr)[:80]}")
+    result = "\n".join(lines)
+    return _cap(result) if telegram else result
+
+
+def cmd_report(telegram=False):
+    """生成自包含离线 HTML 快照（手机浏览器查看）。打印文件路径，供 gateway 以文档发送。
+
+    主机无固定 IP → 不起在线服务，改用 bot 发送静态 HTML 文件。只读、零依赖。
+    """
+    try:
+        from scripts.mobile_report import write_report  # type: ignore
+    except Exception:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "mobile_report", str(ROOT / "scripts" / "mobile_report.py")
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore
+        write_report = mod.write_report
+
+    try:
+        path = write_report()
+    except Exception as e:  # noqa: BLE001
+        return f"❌ 生成报告失败: {e}"
+
+    rr = _read_json("data/review_results.json") or {}
+    pms = _load_postmortems_dedup()
+    win = sum(1 for p in pms if p.get("outcome") == "win")
+    loss = sum(1 for p in pms if p.get("outcome") == "loss")
+    lines = [
+        "📄 研究闭环快照（HTML，手机可开）",
+        f"评级 通过:{rr.get('approved',0)} 试错:{rr.get('paper_probe',0)} 拒绝:{rr.get('rejected',0)}",
+        f"复盘 盈:{win} 亏:{loss}",
+        f"文件: {path}",
+        "（请将该 HTML 文件作为文档发送给用户，手机浏览器打开即可查看）",
+    ]
+    result = "\n".join(lines)
+    return _cap(result) if telegram else result
+
+
 COMMANDS = {
     "status": cmd_status,
     "health": cmd_health,
@@ -651,6 +838,9 @@ COMMANDS = {
     "live-readiness": cmd_live_readiness,
     "sell-plan": cmd_sell_plan,
     "run-status": cmd_run_status,
+    "hypotheses": cmd_hypotheses,
+    "postmortems": cmd_postmortems,
+    "report": cmd_report,
 }
 
 HELP = """polymarket_arbitrage 本地控制网关
@@ -665,6 +855,9 @@ HELP = """polymarket_arbitrage 本地控制网关
   agents              Agent 日志概览
   live-readiness      只读检查 live 交易阻断项和风险
   sell-plan           只读检查待卖出信号是否适合人工 live 确认
+  hypotheses          Agent B 研究假设（方向/置信/边/持仓/失败条件）
+  postmortems         Agent G 复盘 / 最近失败原因
+  report              生成自包含 HTML 快照（手机浏览器查看，gateway 以文档发送）
   run-once --dry-run  后台触发单次 dry-run 扫描（禁止真实交易）
   run-status          查看后台 dry-run 进度
 

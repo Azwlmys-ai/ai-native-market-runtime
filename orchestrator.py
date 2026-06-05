@@ -77,7 +77,11 @@ class Orchestrator:
             # 第 1 步：数据采集（Agent A）
             self.log("步骤 1/17: 数据采集 (Agent A)")
             self._run_agent("agent_a")
-            
+
+            # 第 1.5 步：记录每市场价格快照（Phase 3b，供 Agent P 波动退出/真实最高水位）
+            # 无条件写 data/market_price_history.json 事实源；best-effort，绝不影响主流程。
+            self._record_market_prices()
+
             # 第 2 步：市场状态识别（Regime Detector）
             self.log("步骤 2/16: 市场状态识别 (Regime Detector)")
             self._run_agent("regime_detector")
@@ -135,6 +139,15 @@ class Orchestrator:
             # 步骤 12.5：汇总各 agent 信号到 signals.json
             self._consolidate_signals_for_review()
 
+            # 步骤 12.5b：从信号派生研究假设（Phase 3c，加法、best-effort、不改交易决策）
+            try:
+                from runtime import hypothesis as _hyp
+                _hres = _hyp.generate(base_dir=self.base_dir, cycle_id=cycle_id)
+                if _hres.get("generated"):
+                    self.log(f"🔬 派生 {_hres['generated']} 条研究假设 (hypotheses)")
+            except Exception as _he:
+                self.log(f"⚠️  研究假设派生失败（非致命）: {_he}")
+
             # 步骤 12.6：定量风险引擎（P0 Risk Engine）
             self.log("步骤 12.6/17: 定量风险引擎 (RiskEngine)")
             self._run_risk_engine()
@@ -181,6 +194,35 @@ class Orchestrator:
             self._run_agent("agent_i")
             
             self.log("✅ 扫描周期完成")
+
+            # 可视化快照刷新（read-only，best-effort，无条件）：dashboard 读 visualization_state.json，
+            # 此前因不在 pipeline 而 stale；接回周期末保持新鲜。任何失败都不影响周期。
+            try:
+                from agents.agent_visualization import build_state, OUTPUT_PATH
+                import json as _json
+                OUTPUT_PATH.write_text(
+                    _json.dumps(build_state(), indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                self.log("🖼️  可视化快照已刷新 (visualization_state.json)")
+            except Exception as _ve:
+                self.log(f"⚠️  可视化快照刷新失败（非致命）: {_ve}")
+
+            # 影子库刷新（Phase 1）：只读本周期已落盘的 json，回填 SQLite 影子库。
+            # 仅当 PA_SHADOW_DB=1 时生效；best-effort，任何失败都不影响周期成功。
+            # 不改任何 json 写入路径——零行为变化，dry-run 链路完全不经过 DB。
+            if os.environ.get("PA_SHADOW_DB", "").lower() in ("1", "true", "yes"):
+                try:
+                    from runtime import ingest as _ingest
+                    _ingest.backfill()
+                    self.log("🗃️  影子库已刷新 (runtime.db)")
+                    # Phase 3a：逐笔复盘（确定性，best-effort，加法产物，不改交易行为）
+                    from runtime import postmortem as _pm
+                    _pmres = _pm.generate(base_dir=self.base_dir)
+                    if _pmres.get("generated"):
+                        self.log(f"🧾 新增 {_pmres['generated']} 笔复盘 (postmortems)")
+                except Exception as _e:
+                    self.log(f"⚠️  影子库刷新失败（非致命）: {_e}")
+
             write_event(
                 cycle_id=cycle_id,
                 type="orchestrator.cycle_completed",
@@ -232,10 +274,39 @@ class Orchestrator:
                 "current_step": current_step,
                 "last_log": message,
             }
-            with open(self.status_file, "w") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
+            # Phase 0 写入收敛：经 datastore 门面写 orchestrator_status.json
+            from runtime import datastore as _ds
+            _ds.write_status(payload, base_dir=self.base_dir)
         except Exception:
             pass
+
+    def _record_market_prices(self):
+        """Phase 3b：把本周期 latest_data.polymarket_markets 的价格快照记入历史。
+
+        无条件写 data/market_price_history.json（agent_p 读的事实源）+ 影子表（PA_SHADOW_DB 时）。
+        best-effort：任何异常只记日志，绝不影响周期。
+        """
+        try:
+            latest = self.data_dir / "latest_data.json"
+            if not latest.exists():
+                return
+            data = json.loads(latest.read_text())
+            ts = data.get("timestamp")
+            points = []
+            for m in data.get("polymarket_markets", []) or []:
+                prices = m.get("outcome_prices") or []
+                yes_p = prices[0] if len(prices) > 0 else None
+                no_p = prices[1] if len(prices) > 1 else None
+                points.append({
+                    "market_id": m.get("id"), "slug": m.get("slug"), "ts": ts,
+                    "yes_price": yes_p, "no_price": no_p, "liquidity": m.get("liquidity"),
+                })
+            if points:
+                from runtime import datastore as _ds
+                _ds.record_market_prices(points, base_dir=self.base_dir)
+                self.log(f"💹 记录 {len(points)} 个市场价格快照")
+        except Exception as _e:
+            self.log(f"⚠️  价格快照记录失败（非致命）: {_e}")
 
     def _acquire_run_lock(self):
         """Prevent overlapping runs from cron, Hermes, VS Code, or manual shells."""
@@ -395,6 +466,10 @@ class Orchestrator:
                         "market_evidence",
                         "learned_rule_match",
                         "reason",
+                        # Phase 3c-2：透传 Agent B 原生研究假设字段到 signals.json，
+                        # 供 hypothesis 提取器优先采用（source derived→agent_b）。
+                        "holding_horizon_days",
+                        "failure_conditions",
                     ):
                         if field in sig:
                             normalized[field] = sig[field]
@@ -406,10 +481,9 @@ class Orchestrator:
             self.log("⚠️  本轮无新信号，signals.json 不更新")
             return
 
-        # 写入 signals.json（完整替换，不追加旧信号）
-        signals_file = self.data_dir / "signals.json"
-        with open(signals_file, "w") as f:
-            json.dump(fresh_signals, f, indent=2, ensure_ascii=False)
+        # 写入 signals.json（完整替换，不追加旧信号）—— Phase 0 写入收敛，经 datastore 门面
+        from runtime import datastore as _ds
+        _ds.put_signals("orchestrator_consolidate", fresh_signals, base_dir=self.base_dir)
         self.log(f"✅ 汇总 {len(fresh_signals)} 个新信号到 signals.json")
 
     def _write_skipped_review(self, reason):
@@ -427,10 +501,9 @@ class Orchestrator:
             "rejected_signals": [],
             "cache_stats": {"hits": 0, "misses": 0, "hit_rate": "0%"},
         }
-        with open(review_file, "w") as f:
-            json.dump(review, f, indent=2, ensure_ascii=False)
-        with open(approved_file, "w") as f:
-            json.dump([], f, indent=2, ensure_ascii=False)
+        # Phase 0 写入收敛：经 datastore 门面写 review_results + approved_signals（[]）
+        from runtime import datastore as _ds
+        _ds.put_review("orchestrator_skipped", review, approved_signals=[], base_dir=self.base_dir)
 
     def _write_skipped_execution_results(self, reason):
         output = {
@@ -444,9 +517,9 @@ class Orchestrator:
             "failed": 0,
             "results": [],
         }
-        output_file = self.data_dir / "execution_results.json"
-        with open(output_file, "w") as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
+        # Phase 0 写入收敛：经 datastore 门面写 execution_results.json
+        from runtime import datastore as _ds
+        _ds.record_executions("orchestrator_skipped", output, side="BUY", base_dir=self.base_dir)
     
     def _run_agent(self, agent_name):
         """运行单个 Agent"""

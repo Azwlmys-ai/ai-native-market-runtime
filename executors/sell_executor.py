@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
+from paper_pnl import get_paper_portfolio
 
 
 class SellExecutor:
@@ -78,6 +79,7 @@ class SellExecutor:
             "amount": amount or 0,
             "reason": signal.get("reason", "Unknown"),
             "priority": signal.get("priority", "medium"),
+            "price": signal.get("price"),
         }
 
     def execute_sell(self, signal):
@@ -99,6 +101,12 @@ class SellExecutor:
 
         if os.environ.get("EXECUTOR_DRY_RUN", "").lower() in ("1", "true", "yes"):
             self.log(f"[DRY_RUN] would sell: {market} {outcome} amount={amount}")
+            # 结算虚拟持仓 P&L
+            try:
+                pp = get_paper_portfolio()
+                pp.close_position(signal)
+            except Exception as e:
+                self.log(f"⚠️ paper_pnl 结算失败: {e}")
             return {
                 "status": "dry_run",
                 "signal": signal,
@@ -154,9 +162,12 @@ class SellExecutor:
             "timestamp": datetime.now().isoformat(),
             "action": "sell",
             "market_id": signal.get("market_id") or signal.get("market"),
+            "market_slug": signal.get("market_slug") or signal.get("slug") or signal.get("market"),
             "market_name": signal.get("market_name") or signal.get("market"),
             "token_id": signal.get("token_id") or signal.get("outcome"),
             "amount": normalized["amount"],
+            "price": normalized.get("price"),
+            "price_source": signal.get("price_source"),
             "reason": normalized["reason"],
             "status": status,
             "output": output,

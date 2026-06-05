@@ -35,7 +35,9 @@ def test_load_config():
 
     cfg = load_llm_config()
     assert "agent_models" in cfg
-    assert cfg["agent_models"]["agent_codex"] == "deepseek-v4-flash"
+    # 2026-06-02：全部 21 个 agent 由 deepseek-v4-flash 统一升级为 deepseek-v4-pro
+    # （config/llm_config.json 为路由事实源；此断言跟随该全局升级更新）
+    assert cfg["agent_models"]["agent_codex"] == "deepseek-v4-pro"
     fallback = get_fallback_map(cfg)
     assert fallback["grok-4.3"] == "claude-opus-4-7"
     assert "[REDACTED]" not in fallback
@@ -89,7 +91,14 @@ def test_agent_p_uses_pm_trader_env(tmp_path):
             positions = agent.get_portfolio()
 
     assert positions == fake_positions
-    assert json.loads((tmp_path / "data" / "positions.json").read_text()) == fake_positions
+    # save_positions now annotates each entry with a `status` field ("open" or "closed").
+    # Verify the saved snapshot contains the original fields plus the expected status.
+    saved = json.loads((tmp_path / "data" / "positions.json").read_text())
+    assert len(saved) == len(fake_positions)
+    for saved_pos, orig_pos in zip(saved, fake_positions):
+        for k, v in orig_pos.items():
+            assert saved_pos[k] == v, f"field {k!r} mismatch"
+        assert saved_pos.get("status") == "open", "positions without closed registry entry must be status=open"
     mock_env.assert_called_once()
     assert mock_run.call_args.kwargs["env"] == {"PYTHONPATH": "x"}
 

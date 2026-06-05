@@ -63,6 +63,35 @@ Polymarket 套利系统:多 agent + LLM 驱动,采集 Polymarket 行情 + 加密
 
 ---
 
+## 运行时写入层（Phase 0 起，2026-06-02 已主机验证）
+
+VNext 改造已落地「单写者门面 + SQLite 影子库」。**所有 live 文件写入统一走 `runtime/datastore.py` 门面**，不再各模块直接 `open(w)/json.dump`：
+
+- `runtime/datastore.py` — 唯一写入门面（模块函数，非类）。json 永远先写、写成功即算成功；shadow 写在其后、best-effort、失败只记日志绝不抛。函数带 `base_dir` 可选参（保测试隔离）。
+- `runtime/_shadow.py` — SQLite 影子写；默认关，`PA_SHADOW_DB=1` 才生效。持仓三套 schema 由 `_canon_pos()` 集中归一。**Phase 2a 起 uid 用 canonical_market_id**（见下）。
+  - **schema 迁移**：`_migrate()` 轻量自迁移（无 Alembic）。**新增列必须登记到 `_EXPECTED_COLUMNS`**（靠 `ALTER ADD COLUMN` 补旧库），不能只改 `CREATE TABLE`（对旧表是 no-op）；依赖新列的索引要放 `_migrate` 在补列后建，别放 schema.sql。
+  - **canonical market identity**（`runtime/market_identity.py`）：canonical key = Polymarket 数字 id；`markets` 维表累积 id↔slug↔question（latest_data 权威 + 业务记录 harvest）；resolve = id→slug→question→临时键 `slug:<x>`。影子库是可重建旁路，**schema 升级后建议删 `data/runtime.db` 重建**（旧 uid 行不会自动迁移）。
+    - **临时键 reconcile 自动化（2026-06-04）**：`_shadow.upgrade_provisional_positions()` 把非数字 canonical（`slug:`/裸 slug/`q:`）持仓按精确 slug 或 question 升级合并到权威**纯数字** id（真·slug-only 市场不动）。已接入 `ingest.backfill()` 末尾 → 覆盖 orchestrator 周期末（在复盘前）+ standalone 重建 + FastAPI `/admin/reconcile-provisional`。**防污染**：权威已平仓行存在时只删重复 provisional，不让其 `0/空` 值经 `_upsert_position` 的 `COALESCE(excluded,…)` 冲掉真实平仓 pnl。详见 PHASE2A_PROVISIONAL_RECONCILE.md。
+- `runtime/schema.sql` — 表：signals/reviews/paper_orders/paper_positions/paper_trades/runtime_events + markets(2a) + postmortems(3a)。库文件 `data/runtime.db`，可用 `PA_DB_PATH` 覆盖位置。
+- `runtime/price_history.py` — 每市场价格历史 + 波动率/最高水位（Phase 3b）。事实源 `data/market_price_history.json`（orchestrator 步骤 1.5 每周期 append，滚动 60 点，无条件写）+ 影子 `market_prices` 表。agent_p 波动退出读事实源(不依赖 DB)；`should_volatility_exit` 样本<5 不触发。**真实最高水位 trailing（2026-06-04 完成）**：`agent_p._peak_pnl_from_history` 按持有方向取 yes/no_price 序列 `high_water` 算真实峰值浮盈，trailing 改为「从真实峰值回撤 ≥ trailing_percent 才卖」(样本<3 或无映射回退旧「达 trigger 即止盈」行为)。
+- **Agent M 三级 risk grading（Phase 3d）**：`agents/agent_m.py` 由二元 approve/reject 改为 approve/paper_probe/reject。确定性 `_grade()` 裁定（硬规则拒绝前置）：失败概率>=60→REJECT；35<=fp<60 且健全(有 data_sources+logic_chain)→PAPER_PROBE；fp<35 且 LLM=APPROVE 且健全→APPROVE。probe 信号 position_size ×0.25 + `grade=paper_probe`，进 approved_signals 照常执行但**仍 dry_run（success=0 护栏不破）**。`_shadow.upsert_reviews` 读 `probe_signals` 记 PAPER_PROBE；事件 `risk.paper_probe`。学习隔离靠 status=dry_run（只学 success/failed）。
+- `runtime/hypothesis.py` — Agent B 研究假设提取（Phase 3c-1）。每信号确定性派生结构化假设(方向/置信/预期边/持仓时长/失败条件)，写 `data/hypotheses.jsonl` + 影子 `hypotheses` 表；orchestrator 步骤 12.5b 无条件生成。**原生 holding_horizon_days/failure_conditions 优先**(为 3c-2 扩 B prompt 预留，source derived→agent_b)。经 signal_uid 与 signals/postmortems 闭环。`GET /hypotheses`。
+  - **Phase 3c-2 失败条件对照（2026-06-04 已沙箱验证）**：复盘引擎按 signal_uid 取 hypothesis，对每条 `failure_conditions` 判定「是否发生」+ 整体 `hypothesis_verdict`（confirmed/refuted/loss_unexplained/no_prediction/inconclusive），写 postmortems 新列 + jsonl。schema→`0.3.3-phase3c2`（postmortems 加 `hypothesis_verdict` 列，已登记 `_EXPECTED_COLUMNS`）。**ingest 已补回填 hypotheses**（删库重建后对照仍可用；postmortems 不回填，靠复盘引擎重跑带 verdict）。dashboard `/research` 复盘卡片露出对照徽章 + 逐条发生/未发生。详见 PHASE3C2_FAILURE_CONDITION_REVIEW.md。
+- `runtime/postmortem.py` — Agent G 复盘引擎（Phase 3a）。逐笔已平仓 join 原始信号 → 结构化复盘(hypothesis/expected_edge/failure_reason/liquidity|timing|model_issue)，写 `data/postmortems.jsonl` + 影子表。确定性 fallback 默认（沙箱可验）；LLM 增强需 `use_llm`/`PA_POSTMORTEM_LLM=1`（主机）。orchestrator 周期末自动确定性生成。`GET /postmortems`。
+- `runtime/ingest.py` — 从现有 json 回填影子库 + 对账；只读 live json。`python3 -m runtime.ingest`。
+- `runtime/api.py` — Paper Runtime API（FastAPI，Phase 2b）。GET 读影子 DB(canonical)；POST /paper/open|close 写经 paper_pnl→datastore。**POST 写端复用 `orchestrator.lock`（`runtime/locking.py`），周期跑时返回 409**——单写者不破。主机起：`PA_SHADOW_DB=1 uvicorn runtime.api:app --port 8848`（需 venv 装 fastapi uvicorn）。Next.js dashboard 仍只读 json。
+  - ⚠ **主机 venv 是 Python 3.9**：FastAPI 运行时会 introspect 函数签名，故 API 端点参数注解**不能用 PEP 604 的 `X | None`**（即使有 `from __future__ import annotations` 也会炸），用 `Optional[X]`。
+- **JSON 仍是唯一事实源**，DB 纯旁路，dry-run 链路完全不经过 DB。orchestrator 周期末有 best-effort 影子刷新钩子（`PA_SHADOW_DB=1` 时）。
+
+已收敛的写者：`paper_pnl.py` / `agents/agent_p.py` / `agents/agent_m.py`(标准模式) / `executors/signal_executor.py` / `orchestrator.py`。
+两个 deprecated orchestrator（advanced/realtime）已加头注释，唯一入口仍是 `main.py --mode once → orchestrator.run_once()`。
+
+**新纪律**：改 live 写入时**改门面或调门面，不要新增直接 `json.dump` 到 data/**。根目录 `signal_executor.py` 已是 thin wrapper（re-export `executors/`），不必再“两份都改”。
+
+下一步：Phase 2 — paper_pnl API 化 + canonical market identity（持仓缺统一市场主键：portfolio 多 `market_slug=""`、positions 无 `market_id`）。
+
+---
+
 ## 当前修复状态
 
 参见 [FIX_PLAN.md](./FIX_PLAN.md) v3.1 — 12 条已核实问题、优先级、smoke test、受控启动方案。

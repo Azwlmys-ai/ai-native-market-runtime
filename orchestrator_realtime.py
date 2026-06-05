@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+# ============================================================================
+# ⚠️ DEPRECATED（2026-06-02）— 非唯一调度入口，请勿用于新接入
+# ----------------------------------------------------------------------------
+# 唯一活跃调度入口：launchd → scripts/scheduled_orchestrator_dryrun.sh
+#                  → main.py --mode once → orchestrator.py:Orchestrator().run_once()
+# 本文件保留仅为历史/手动调试用途。Phase 0 写入收敛后，新的写入一律走
+# runtime.datastore 门面；本文件不接入 DataStore，也不应被排程拉起。
+# 详见 PHASE0_WRITE_CONVERGENCE.md / PHASE0_CONTRACTS.md
+# ============================================================================
 """
 实时交易 Orchestrator
 - 每天至少 10 笔交易

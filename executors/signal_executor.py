@@ -34,16 +34,18 @@ class SignalExecutor:
             "ts": datetime.now(timezone.utc).isoformat(),
             "cycle_id": cycle_id,
             "market_id": signal.get("market_id", ""),
+            "market_slug": signal.get("market_slug") or signal.get("slug") or "",
+            "market": signal.get("market", ""),
+            "market_name": signal.get("market_name", ""),
             "side": signal.get("direction", ""),
             "entry_price": float(signal.get("price", 0) or 0),
             "size": float(signal.get("position_size", 0) or 0),
             "source_agent": signal.get("source", ""),
             "execution_type": "paper",
         }
-        trades_file = self.data_dir / "paper_trades.jsonl"
-        with open(trades_file, "a") as f:
-            json.dump(trade, f, ensure_ascii=False)
-            f.write("\n")
+        # Phase 0 写入收敛：经 runtime.datastore 门面 append（行格式不变）
+        from runtime import datastore as _ds
+        _ds.append_paper_trade(trade, base_dir=self.base_dir)
     
     def load_approved_signals(self):
         """加载通过审查的信号"""
@@ -182,11 +184,11 @@ class SignalExecutor:
             "results": results
         }
 
-        output_file = self.data_dir / "execution_results.json"
-        with open(output_file, 'w') as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
-
-        return output_file
+        # Phase 0 写入收敛：经 runtime.datastore 门面（json 输出不变）
+        from runtime import datastore as _ds
+        _ds.record_executions(output.get("timestamp") or "signal_executor", output,
+                              side="BUY", base_dir=self.base_dir)
+        return self.data_dir / "execution_results.json"
     
     def run(self):
         """执行所有通过审查的信号"""

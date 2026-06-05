@@ -150,3 +150,186 @@ def test_analyze_positions_no_positions_returns_empty(tmp_path):
     agent = _make_agent_p(tmp_path)
     signals = agent.analyze_positions([])
     assert signals == []
+
+
+def test_sell_signal_valid_price_marks_current_price(tmp_path):
+    agent = _make_agent_p(tmp_path)
+    signal = agent.build_sell_signal(
+        {
+            "market_slug": "valid-price-market",
+            "outcome": "no",
+            "shares": 10,
+            "live_price": 0.42,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        {},
+    )
+    assert signal["price"] == 0.42
+    assert signal["price_source"] == "current_price"
+
+
+def test_sell_signal_missing_price_marks_missing(tmp_path):
+    agent = _make_agent_p(tmp_path)
+    signal = agent.build_sell_signal(
+        {
+            "market_slug": "missing-price-market",
+            "outcome": "no",
+            "shares": 10,
+            "live_price": 0.0,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        {},
+    )
+    assert signal["price"] is None
+    assert signal["price_source"] == "missing"
+    assert signal["warning"] == "missing_exit_price"
+    assert "missing_exit_price" in signal["reason"]
+
+
+def test_entry_price_fallback_used_before_missing(tmp_path):
+    agent = _make_agent_p(tmp_path)
+    signal = agent.build_sell_signal(
+        {
+            "market_slug": "entry-fallback-market",
+            "outcome": "no",
+            "shares": 10,
+            "live_price": 0.0,
+            "avg_entry_price": 0.73,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        {},
+    )
+    assert signal["price"] == 0.73
+    assert signal["price_source"] == "entry_price_fallback"
+    assert "warning" not in signal
+
+
+def test_no_null_price_with_current_price_source(tmp_path):
+    agent = _make_agent_p(tmp_path)
+    signal = agent.build_sell_signal(
+        {
+            "market_slug": "bad-current-price-market",
+            "outcome": "yes",
+            "shares": 10,
+            "current_price": None,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        {},
+    )
+    assert not (signal["price"] is None and signal["price_source"] == "current_price")
+
+
+def test_slug_matches_latest_data_price(tmp_path):
+    agent = _make_agent_p(tmp_path)
+    latest_data = {
+        "polymarket_markets": [
+            {
+                "id": "123",
+                "slug": "slug-price-market",
+                "question": "Slug price market?",
+                "outcomes": ["Yes", "No"],
+                "outcome_prices": [0.31, 0.69],
+            }
+        ]
+    }
+    signal = agent.build_sell_signal(
+        {
+            "market_slug": "slug-price-market",
+            "outcome": "no",
+            "shares": 10,
+            "live_price": 0.0,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        latest_data,
+    )
+    assert signal["price"] == 0.69
+    assert signal["price_source"] == "market_price"
+
+
+def test_market_id_matches_latest_data_price(tmp_path):
+    agent = _make_agent_p(tmp_path)
+    latest_data = {
+        "polymarket_markets": [
+            {
+                "id": "456",
+                "slug": "id-price-market",
+                "question": "ID price market?",
+                "outcomes": ["Yes", "No"],
+                "outcome_prices": [0.27, 0.73],
+            }
+        ]
+    }
+    signal = agent.build_sell_signal(
+        {
+            "market_id": "456",
+            "market_slug": "different-slug",
+            "outcome": "yes",
+            "shares": 10,
+            "live_price": 0.0,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        latest_data,
+    )
+    assert signal["price"] == 0.27
+    assert signal["price_source"] == "market_price"
+
+
+def test_outcome_yes_no_prices_are_not_inverted(tmp_path):
+    agent = _make_agent_p(tmp_path)
+    latest_data = {
+        "polymarket_markets": [
+            {
+                "id": "789",
+                "slug": "outcome-price-market",
+                "question": "Outcome price market?",
+                "outcomes": ["Yes", "No"],
+                "outcome_prices": [0.22, 0.78],
+            }
+        ]
+    }
+    yes_signal = agent.build_sell_signal(
+        {
+            "market_slug": "outcome-price-market",
+            "outcome": "yes",
+            "shares": 10,
+            "live_price": 0.0,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        latest_data,
+    )
+    no_signal = agent.build_sell_signal(
+        {
+            "market_slug": "outcome-price-market",
+            "outcome": "no",
+            "shares": 10,
+            "live_price": 0.0,
+        },
+        "止损",
+        "urgent",
+        -0.2,
+        "default",
+        latest_data,
+    )
+    assert yes_signal["price"] == 0.22
+    assert no_signal["price"] == 0.78

@@ -377,17 +377,19 @@ class AgentM:
 评估要求（严格标准）：
 - 列出 2-3 个主要风险点
 - 评估失败概率（0-100）
-- 给出最终建议：
-  * APPROVE：必须同时满足以下所有条件
+- 给出最终建议（三级 risk grading，不再一票否决）：
+  * APPROVE：正常 paper 仓位。必须同时满足以下所有条件
     - 有具体数据源（data_sources）且与标的直接相关
     - 有完整逻辑链（logic_chain）且推理合理
     - EV 在合理范围内（0% < EV < 100%）
     - 失败概率 < 35%
     - 仓位 < 20%
+  * PAPER_PROBE：小仓试错。信号其余健全（数据源/逻辑链完整、EV 合理、仓位<20%），
+    但失败概率处于中等区间（35% <= 失败概率 < 60%）——不直接否决，给小额受控试错以沉淀学习。
   * REJECT：满足以下任一条件即拒绝
     - 数据源泛化或与标的无关
     - EV > 100%（不合理）或 EV < 0%（亏损）
-    - 失败概率 >= 35%
+    - 失败概率 >= 60%
     - 仓位 >= 20%
     - 逻辑链不完整或推理不合理
 
@@ -408,7 +410,7 @@ class AgentM:
 
 {learning_enhancement}
 
-输出 JSON 格式：
+输出 JSON 格式（decision 取 APPROVE / PAPER_PROBE / REJECT 之一）：
 {{
   "risk_points": ["风险点1", "风险点2"],
   "failure_probability": 35,
@@ -481,6 +483,41 @@ class AgentM:
                 "explanation": f"响应解析错误: {e}"
             }
     
+    # --- Phase 3d 三级 risk grading 参数 ---
+    PROBE_MIN_FP = 35.0     # 失败概率下界（含），进入 PAPER_PROBE
+    PROBE_MAX_FP = 60.0     # 失败概率上界（不含），>= 此值直接 REJECT
+    PROBE_SIZE_FACTOR = 0.25  # paper_probe 仓位 = 正常仓 × 0.25
+
+    @staticmethod
+    def _signal_sound(signal: dict) -> bool:
+        """可审计健全性：有具体数据源 + 完整逻辑链（probe 也要求健全，不试错垃圾信号）。"""
+        return bool(signal.get("data_sources")) and bool(signal.get("logic_chain"))
+
+    def _grade(self, result: dict) -> str:
+        """确定性三级裁定（两者结合：LLM 提议 + failure_probability band）。
+
+        硬规则拒绝（_deterministic_rejection）已在 review_signal 前置；这里只对过了硬规则的信号分级。
+        - 失败概率 >= 60%                          → REJECT
+        - 35% <= 失败概率 < 60% 且信号健全          → PAPER_PROBE（不再一票否决；不健全则 REJECT）
+        - 失败概率 < 35% 且 LLM=APPROVE 且信号健全   → APPROVE（否则 REJECT：LLM 有数据/逻辑顾虑）
+        """
+        review = result.get("review", {}) or {}
+        signal = result.get("signal", {}) or {}
+        llm_decision = str(result.get("decision", "REJECT")).upper()
+        try:
+            fp = float(review.get("failure_probability"))
+        except (TypeError, ValueError):
+            fp = 100.0
+
+        if fp >= self.PROBE_MAX_FP:
+            return "REJECT"
+        if self.PROBE_MIN_FP <= fp < self.PROBE_MAX_FP:
+            return "PAPER_PROBE" if self._signal_sound(signal) else "REJECT"
+        # fp < 35
+        if llm_decision == "APPROVE" and self._signal_sound(signal):
+            return "APPROVE"
+        return "REJECT"
+
     def run(self):
         """主流程（弹性负载均衡）"""
         self.log("开始风险审查...")
@@ -502,28 +539,43 @@ class AgentM:
             self.log("📝 使用串行处理")
             results = self._review_sequential(signals)
         
-        # 分类结果
+        # 分类结果（Phase 3d 三级：approve / paper_probe / reject）
         approved = []
+        probes = []
         rejected = []
 
         cycle_id = os.environ.get("PA_CYCLE_ID", f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
 
         for result in results:
-            decision = result["decision"]
-            if decision == "APPROVE":
+            signal = result.get("signal", {})
+            grade = self._grade(result)
+            result["grade"] = grade
+            result["decision"] = grade  # 最终 grade 覆盖 decision，供 reviews/下游一致
+
+            if grade == "APPROVE":
+                signal["grade"] = "approve"
                 approved.append(result)
+                event_type = "signal.reviewed"
+            elif grade == "PAPER_PROBE":
+                # 小仓试错：仓位压到正常 ×0.25，标 grade，仍 dry_run 执行
+                try:
+                    ps = float(signal.get("position_size", 0.1) or 0.1)
+                except (TypeError, ValueError):
+                    ps = 0.1
+                signal["position_size"] = round(ps * self.PROBE_SIZE_FACTOR, 4)
+                signal["grade"] = "paper_probe"
+                probes.append(result)
+                event_type = "risk.paper_probe"
             else:
                 rejected.append(result)
+                event_type = "risk.rejected"
 
-            # Emit runtime review/risk event
-            signal = result.get("signal", {})
-            event_type = "signal.reviewed" if decision == "APPROVE" else "risk.rejected"
             write_event(
                 cycle_id=cycle_id,
                 type=event_type,
                 agent="agent_m",
                 payload={
-                    "decision": decision,
+                    "decision": grade,
                     "market_id": signal.get("market_id", ""),
                     "market_name": signal.get("market_name", ""),
                     "direction": signal.get("direction", ""),
@@ -543,20 +595,23 @@ class AgentM:
 
         self.log(f"  [real]  通过 {len(approved_real)}, 拒绝 {len(rejected_real)}")
         self.log(f"  [paper] 通过 {len(approved_paper)}, 拒绝 {len(rejected_paper)}")
+        self.log(f"  [grade] approve {len(approved)}, paper_probe {len(probes)}, reject {len(rejected)}")
 
-        # 保存审查结果
+        # 保存审查结果（Phase 3d 三级）
         output = {
             "timestamp": datetime.now().isoformat(),
             "total": len(signals),
             "real_signals": real_total,
             "paper_signals": paper_total,
             "approved": len(approved),
+            "paper_probe": len(probes),
             "rejected": len(rejected),
             "approved_real": len(approved_real),
             "approved_paper": len(approved_paper),
             "rejected_real": len(rejected_real),
             "rejected_paper": len(rejected_paper),
             "approved_signals": approved,
+            "probe_signals": probes,
             "rejected_signals": rejected,
             "cache_stats": {
                 "hits": self.cache_hits,
@@ -564,24 +619,24 @@ class AgentM:
                 "hit_rate": f"{self.cache_hits / len(signals) * 100:.1f}%" if signals else "0%"
             }
         }
+
+        # 提取通过的信号（approve + paper_probe 都执行；probe 已压仓）
+        approved_signals_only = [r["signal"] for r in approved] + [r["signal"] for r in probes]
         
-        # 提取通过的信号（只保留 signal 字段）
-        approved_signals_only = [result["signal"] for result in approved]
-        
-        # 批次模式：保存到指定文件
-        if self.output_file:
-            output_file = self.output_file
-        else:
-            # 标准模式：保存到主结果文件
-            output_file = self.data_dir / "review_results.json"
-        
-        with open(output_file, 'w') as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
-        
-        # 保存通过的信号到 approved_signals.json（供执行器使用）
         approved_signals_file = self.data_dir / "approved_signals.json"
-        with open(approved_signals_file, 'w') as f:
-            json.dump(approved_signals_only, f, indent=2, ensure_ascii=False)
+        if self.output_file:
+            # 批次/调试模式：自定义输出文件，不进 live review_results，保留直写
+            output_file = self.output_file
+            with open(output_file, 'w') as f:
+                json.dump(output, f, indent=2, ensure_ascii=False)
+            with open(approved_signals_file, 'w') as f:
+                json.dump(approved_signals_only, f, indent=2, ensure_ascii=False)
+        else:
+            # 标准模式：Phase 0 写入收敛，经 datastore 门面写 review_results + approved_signals
+            output_file = self.data_dir / "review_results.json"
+            from runtime import datastore as _ds
+            _ds.put_review(output.get("timestamp") or "agent_m", output,
+                           approved_signals=approved_signals_only, base_dir=self.base_dir)
         
         self.log(f"✅ 审查完成: {len(approved)} 通过, {len(rejected)} 拒绝")
         self.log(f"📊 缓存命中率: {self.cache_hits}/{len(signals)} ({self.cache_hits / len(signals) * 100:.1f}%)")

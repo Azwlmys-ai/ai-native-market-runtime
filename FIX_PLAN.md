@@ -728,8 +728,12 @@ def get_fallback_map(config: dict) -> dict:
 | #9 Agent M(回测先) | ✅ | 2026-05-09 | position-cap+加强 whitelist prompt+backtest script 已验证；外部网络 dry-run 中 Vegas/NBA 极端价通过，执行保持 dry-run |
 | #12 日志轮转 | ✅ | 2026-05-09 | `scripts/rotate_logs.py` dry-run-first + smoke tests 已完成 |
 | #2 key 治理 | ⏸️ | 2026-05-09 | 用户确认本轮不轮换 |
+| Agent P stop_loss dict bug | ✅ | 2026-05-24 | normalize_stop_loss() 新增；兼容 float/dict/None；tests/test_agent_p_stop_loss.py 13 passed；单周期 dry-run exit=0 |
 | Agent B 字段映射 | ✅ | 2026-05-13 | `apply_learned_rules` 中 `yes_price`/`no_price` 从 `outcome_prices` 派生；`orderbook_no` 改用 `liquidity` 兜底；修复前所有 100 个市场被错误拒绝，修复后 10 个市场正常通过 |
 | capital_adapter 超时 | ✅ | 2026-05-14 | LLM timeout 60→100s；subprocess timeout 120→150s；加规则兜底（按 regime 映射仓位，LLM 失败时输出合法 capital 配置） |
 | agent_m subprocess timeout | ✅ | 2026-05-14 | subprocess timeout 180→240s；不动审查逻辑/prompt/双模型策略 |
 | signals.json 汇总缺失 | ✅ | 2026-05-13 | orchestrator 在步骤 12-13 之间加 `_consolidate_signals_for_review()`；从 intelligence_report.json 读 Agent B 信号，做 schema 归一化（market_slug→market_id, side→direction, ev→expected_value），写入 signals.json；修复前 Agent M 每周期跳过，修复后 4 个真实信号进审查（1 通过：Minnesota Wild NO） |
 | strategy_manager 超时 | ✅ | 2026-05-13 | 加 15 分钟缓存（strategy_config_cache.json）；timeout 30→60s，max_retries 3→1；加默认策略配置兜底；原因：3 次重试 * 30s + 退避 ≈ 90s 超 orchestrator 120s 上限 |
+| Agent P price fallback | ✅ | 2026-05-29 | `resolve_exit_price()` 过滤 `live_price≤0`；fallback 顺序：current_price → last_known_price → entry_price_fallback；sell_signals 4/4 有效 price，missing_exit_price=0 自然验证通过 |
+| paper_pnl sell close/writeback | ✅ | 2026-05-29 | `_position_matches_sell()` 新增 Try-3（slug→positions.json→market_name）+ 合成仓位 fallback；`close_reason` 字段写回；`UNMATCHED SELL=0`，realized=$+3372.04，自然验证通过 |
+| positions lifecycle registry | ✅ | 2026-05-29 | `positions_closed_registry.json` 持久化去重；`analyze_positions()` 跳过 closed；`save_positions()` 合并 status；tests/test_agent_p_lifecycle.py 8/8 passed；4 个重复止损自 11:16 起完全停止，paper_portfolio closed 稳定在 910 |

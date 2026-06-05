@@ -4,6 +4,8 @@
 定期采集 Finnhub 和 Polygon 美股数据，带超时保护和降级兜底。
 """
 
+from __future__ import annotations
+
 import json
 import asyncio
 import sys

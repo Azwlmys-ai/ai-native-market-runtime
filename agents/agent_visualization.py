@@ -151,6 +151,7 @@ def summarize_review(raw: Any) -> dict[str, Any]:
         "real_signals": raw.get("real_signals", 0),
         "paper_signals": raw.get("paper_signals", 0),
         "approved": raw.get("approved", 0),
+        "paper_probe": raw.get("paper_probe", 0),   # Phase 3d 三级：小仓试错
         "rejected": raw.get("rejected", 0),
         "approved_real": raw.get("approved_real", 0),
         "approved_paper": raw.get("approved_paper", 0),
@@ -175,6 +176,8 @@ def detail_review(raw: Any) -> dict[str, list[dict[str, Any]]]:
                     "expected_value": signal.get("expected_value"),
                     "confidence": signal.get("confidence"),
                     "decision": item.get("decision"),
+                    "grade": signal.get("grade") or item.get("decision"),  # Phase 3d 三级标记
+                    "position_size": signal.get("position_size"),
                     "review": item.get("review"),
                     "reason": item.get("reason"),
                     "source": signal.get("source"),
@@ -184,6 +187,7 @@ def detail_review(raw: Any) -> dict[str, list[dict[str, Any]]]:
 
     return {
         "approved_signals": normalize(raw.get("approved_signals")),
+        "probe_signals": normalize(raw.get("probe_signals")),   # Phase 3d 三级：小仓试错
         "rejected_signals": normalize(raw.get("rejected_signals")),
     }
 
