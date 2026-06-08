@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # 添加父目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _paths import get_base_dir
-from llm_helper import call_llm_sync
+from llm_helper import call_llm_sync, LLMModelError
 from review_cache import ReviewCache
 from event_logger import write_event
 
@@ -41,6 +41,7 @@ class AgentM:
         # 负载均衡配置
         self.CONCURRENT_THRESHOLD = 3  # 信号数 ≥ 3 时启用并发
         self.MAX_WORKERS = 3  # 最大并发数
+        self.PARTIAL_FLUSH_EVERY = max(1, int(os.environ.get("PA_AGENT_M_PARTIAL_EVERY", "5")))
     
     def log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -274,13 +275,37 @@ class AgentM:
             "market_name": signal.get("market_name"),
             "signal": signal,
             "decision": "REJECT",
+            "review_status": "risk_reject",
             "review": {
                 "risk_points": [reason],
                 "failure_probability": failure_probability,
                 "decision": "REJECT",
+                "review_status": "risk_reject",
                 "explanation": reason,
             },
             "reason": reason,
+        }
+
+    @staticmethod
+    def _model_error_result(signal: dict, error: LLMModelError):
+        explanation = str(error)
+        return {
+            "market_id": signal.get("market_id"),
+            "market_name": signal.get("market_name"),
+            "signal": signal,
+            "decision": "DEFER",
+            "review_status": "model_error",
+            "review": {
+                "risk_points": [],
+                "failure_probability": None,
+                "decision": "DEFER",
+                "review_status": "model_error",
+                "error_type": error.error_type,
+                "models_tried": error.models_tried,
+                "fallback_used": error.fallback_used,
+                "explanation": explanation,
+            },
+            "reason": explanation,
         }
 
     @staticmethod
@@ -291,6 +316,89 @@ class AgentM:
             return str(value)
 
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_cointegration_probe(signal: dict) -> bool:
+        src = str(signal.get("source_agent") or signal.get("source") or "").lower()
+        if src != "cointegration":
+            return False
+        return signal.get("probe") is True or signal.get("tier") in ("research", "exploration")
+
+    def _lightweight_coint_review(self, signal: dict) -> dict:
+        """协整 probe 轻量审查：硬规则 + 结构化评分，不调用 LLM。"""
+        market = signal.get("market_name", signal.get("market", "unknown"))
+        cls = self.classify_signal(signal)
+        signal = self._preprocess_signal(signal, cls)
+
+        deterministic = self._deterministic_rejection(signal, cls)
+        if deterministic:
+            self.log(f"⛔ risk_reject(coint): {market[:60]} - {deterministic['reason']}")
+            return deterministic
+
+        if not self._signal_sound(signal):
+            reason = "协整 probe 信号缺少 data_sources/logic_chain"
+            return self._reject_result(signal, reason, failure_probability=100)
+
+        ev = signal.get("evidence") or {}
+        try:
+            confidence = float(signal.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        try:
+            zscore = abs(float(ev.get("zscore") or 0))
+        except (TypeError, ValueError):
+            zscore = 0.0
+        try:
+            corr = abs(float(ev.get("corr") or 0))
+        except (TypeError, ValueError):
+            corr = 0.0
+
+        data_sufficiency = signal.get("data_sufficiency") or ev.get("data_sufficiency") or "low"
+        tier = signal.get("tier", "research")
+
+        fp = 45.0 if tier == "exploration" else 40.0
+        if data_sufficiency == "low":
+            fp += 10.0
+        if confidence < 40:
+            fp += 10.0
+        if zscore < 1.5:
+            fp += 15.0
+        fp = min(99.0, max(0.0, fp))
+
+        if fp >= self.PROBE_MAX_FP:
+            decision = "REJECT"
+        elif fp >= self.PROBE_MIN_FP:
+            decision = "PAPER_PROBE"
+        else:
+            decision = "PAPER_PROBE"
+            fp = self.PROBE_MIN_FP
+
+        explanation = (
+            f"lightweight coint review: tier={tier} conf={confidence:.1f} "
+            f"z={zscore:.2f} corr={corr:.2f} fp={fp:.1f}"
+        )
+        self.log(f"⚡ lightweight coint: {market[:60]} → {decision}")
+        return {
+            "market_id": signal.get("market_id"),
+            "market_name": signal.get("market_name"),
+            "signal": signal,
+            "decision": decision,
+            "review_status": "lightweight_coint",
+            "review": {
+                "risk_points": [],
+                "failure_probability": fp,
+                "decision": decision,
+                "review_status": "lightweight_coint",
+                "explanation": explanation,
+                "structured_scores": {
+                    "confidence": confidence,
+                    "zscore": zscore,
+                    "corr": corr,
+                    "data_sufficiency": data_sufficiency,
+                },
+            },
+            "reason": explanation,
+        }
 
     def review_signal(self, signal):
         """审查单个信号（单模型验证 + 缓存 + 学习成果）"""
@@ -306,8 +414,11 @@ class AgentM:
 
         deterministic = self._deterministic_rejection(signal, cls)
         if deterministic:
-            self.log(f"⛔ 硬规则拒绝: {market[:60]} - {deterministic['reason']}")
+            self.log(f"⛔ risk_reject: {market[:60]} - {deterministic['reason']}")
             return deterministic
+
+        if self._is_cointegration_probe(signal):
+            return self._lightweight_coint_review(signal)
 
         # 检查缓存
         cached_result = self.cache.get(signal)
@@ -447,16 +558,19 @@ class AgentM:
             
             return review_result
         
+        except LLMModelError as e:
+            tag = e.error_type or "model_error"
+            fb = " fallback_used" if e.fallback_used else ""
+            self.log(f"⚠️ model_error ({tag}{fb}): {market[:60]} - {e}")
+            return self._model_error_result(signal, e)
         except Exception as e:
-            self.log(f"❌ 审查失败: {e}")
-            return {
-                "market_id": signal.get("market_id"),
-                "market_name": signal.get("market_name"),
-                "signal": signal,
-                "decision": "REJECT",
-                "review": {"risk_points": [f"审查异常: {e}"], "failure_probability": 100, "decision": "REJECT", "explanation": f"审查过程出错: {e}"},
-                "reason": f"审查过程出错: {e}"
-            }
+            wrapped = LLMModelError(
+                str(e),
+                error_type="model_error",
+                agent_id="agent_m_primary",
+            )
+            self.log(f"⚠️ model_error: {market[:60]} - {e}")
+            return self._model_error_result(signal, wrapped)
     
     def _parse_response(self, response_text):
         """解析 LLM 响应"""
@@ -497,10 +611,13 @@ class AgentM:
         """确定性三级裁定（两者结合：LLM 提议 + failure_probability band）。
 
         硬规则拒绝（_deterministic_rejection）已在 review_signal 前置；这里只对过了硬规则的信号分级。
+        model_error 不在此分级，直接 DEFER。
         - 失败概率 >= 60%                          → REJECT
         - 35% <= 失败概率 < 60% 且信号健全          → PAPER_PROBE（不再一票否决；不健全则 REJECT）
         - 失败概率 < 35% 且 LLM=APPROVE 且信号健全   → APPROVE（否则 REJECT：LLM 有数据/逻辑顾虑）
         """
+        if result.get("review_status") == "model_error":
+            return "DEFER"
         review = result.get("review", {}) or {}
         signal = result.get("signal", {}) or {}
         llm_decision = str(result.get("decision", "REJECT")).upper()
@@ -518,46 +635,23 @@ class AgentM:
             return "APPROVE"
         return "REJECT"
 
-    def run(self):
-        """主流程（弹性负载均衡）"""
-        self.log("开始风险审查...")
-        
-        signals = self.load_signals()
-        
-        if not signals:
-            self.log("ℹ️  无待审查信号")
-            return
-        
-        signal_count = len(signals)
-        self.log(f"📊 发现 {signal_count} 个信号")
-        
-        # 弹性负载均衡：信号数 ≥ 3 时启用并发
-        if signal_count >= self.CONCURRENT_THRESHOLD:
-            self.log(f"🚀 启用并发处理（{self.MAX_WORKERS} 线程）")
-            results = self._review_concurrent(signals)
-        else:
-            self.log("📝 使用串行处理")
-            results = self._review_sequential(signals)
-        
-        # 分类结果（Phase 3d 三级：approve / paper_probe / reject）
+    def _bucket_review_results(self, signals: list, results: list):
         approved = []
         probes = []
         rejected = []
-
-        cycle_id = os.environ.get("PA_CYCLE_ID", f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
+        model_errors = []
 
         for result in results:
             signal = result.get("signal", {})
             grade = self._grade(result)
             result["grade"] = grade
-            result["decision"] = grade  # 最终 grade 覆盖 decision，供 reviews/下游一致
+            if grade != "DEFER":
+                result["decision"] = grade
 
             if grade == "APPROVE":
                 signal["grade"] = "approve"
                 approved.append(result)
-                event_type = "signal.reviewed"
             elif grade == "PAPER_PROBE":
-                # 小仓试错：仓位压到正常 ×0.25，标 grade，仍 dry_run 执行
                 try:
                     ps = float(signal.get("position_size", 0.1) or 0.1)
                 except (TypeError, ValueError):
@@ -565,104 +659,222 @@ class AgentM:
                 signal["position_size"] = round(ps * self.PROBE_SIZE_FACTOR, 4)
                 signal["grade"] = "paper_probe"
                 probes.append(result)
-                event_type = "risk.paper_probe"
+            elif grade == "DEFER":
+                model_errors.append(result)
             else:
                 rejected.append(result)
-                event_type = "risk.rejected"
-
-            write_event(
-                cycle_id=cycle_id,
-                type=event_type,
-                agent="agent_m",
-                payload={
-                    "decision": grade,
-                    "market_id": signal.get("market_id", ""),
-                    "market_name": signal.get("market_name", ""),
-                    "direction": signal.get("direction", ""),
-                    "review": result.get("review", {}),
-                },
-            )
 
         def _is_paper(sig: dict) -> bool:
             return sig.get("paper", False) or str(sig.get("source", "")).startswith("paper")
 
-        approved_real  = [r for r in approved if not _is_paper(r["signal"])]
-        approved_paper = [r for r in approved if     _is_paper(r["signal"])]
-        rejected_real  = [r for r in rejected if not _is_paper(r["signal"])]
-        rejected_paper = [r for r in rejected if     _is_paper(r["signal"])]
-        real_total     = sum(1 for s in signals if not _is_paper(s))
-        paper_total    = sum(1 for s in signals if     _is_paper(s))
+        approved_real = [r for r in approved if not _is_paper(r["signal"])]
+        approved_paper = [r for r in approved if _is_paper(r["signal"])]
+        rejected_real = [r for r in rejected if not _is_paper(r["signal"])]
+        rejected_paper = [r for r in rejected if _is_paper(r["signal"])]
+        real_total = sum(1 for s in signals if not _is_paper(s))
+        paper_total = sum(1 for s in signals if _is_paper(s))
 
-        self.log(f"  [real]  通过 {len(approved_real)}, 拒绝 {len(rejected_real)}")
-        self.log(f"  [paper] 通过 {len(approved_paper)}, 拒绝 {len(rejected_paper)}")
-        self.log(f"  [grade] approve {len(approved)}, paper_probe {len(probes)}, reject {len(rejected)}")
+        return {
+            "approved": approved,
+            "probes": probes,
+            "rejected": rejected,
+            "model_errors": model_errors,
+            "approved_real": approved_real,
+            "approved_paper": approved_paper,
+            "rejected_real": rejected_real,
+            "rejected_paper": rejected_paper,
+            "real_total": real_total,
+            "paper_total": paper_total,
+        }
 
-        # 保存审查结果（Phase 3d 三级）
+    def _emit_review_events(self, buckets: dict, cycle_id: str):
+        for bucket_name, event_type in (
+            ("approved", "signal.reviewed"),
+            ("probes", "risk.paper_probe"),
+            ("model_errors", "risk.model_error"),
+            ("rejected", "risk.rejected"),
+        ):
+            for result in buckets[bucket_name]:
+                signal = result.get("signal", {})
+                write_event(
+                    cycle_id=cycle_id,
+                    type=event_type,
+                    agent="agent_m",
+                    payload={
+                        "decision": result.get("grade", result.get("decision")),
+                        "market_id": signal.get("market_id", ""),
+                        "market_name": signal.get("market_name", ""),
+                        "direction": signal.get("direction", ""),
+                        "review": result.get("review", {}),
+                    },
+                )
+
+    def _build_review_output(
+        self,
+        signals: list,
+        buckets: dict,
+        cycle_id: str,
+        *,
+        partial: bool = False,
+        processed_count: int | None = None,
+    ) -> tuple[dict, list]:
+        approved = buckets["approved"]
+        probes = buckets["probes"]
+        rejected = buckets["rejected"]
+        model_errors = buckets["model_errors"]
+
         output = {
             "timestamp": datetime.now().isoformat(),
             "total": len(signals),
-            "real_signals": real_total,
-            "paper_signals": paper_total,
+            "processed_count": processed_count if processed_count is not None else len(signals),
+            "partial": partial,
+            "generated_cycle_id": cycle_id,
+            "real_signals": buckets["real_total"],
+            "paper_signals": buckets["paper_total"],
             "approved": len(approved),
             "paper_probe": len(probes),
             "rejected": len(rejected),
-            "approved_real": len(approved_real),
-            "approved_paper": len(approved_paper),
-            "rejected_real": len(rejected_real),
-            "rejected_paper": len(rejected_paper),
+            "model_error": len(model_errors),
+            "approved_real": len(buckets["approved_real"]),
+            "approved_paper": len(buckets["approved_paper"]),
+            "rejected_real": len(buckets["rejected_real"]),
+            "rejected_paper": len(buckets["rejected_paper"]),
             "approved_signals": approved,
             "probe_signals": probes,
             "rejected_signals": rejected,
+            "model_error_signals": model_errors,
             "cache_stats": {
                 "hits": self.cache_hits,
                 "misses": self.cache_misses,
-                "hit_rate": f"{self.cache_hits / len(signals) * 100:.1f}%" if signals else "0%"
-            }
+                "hit_rate": (
+                    f"{self.cache_hits / len(signals) * 100:.1f}%"
+                    if signals else "0%"
+                ),
+            },
         }
+        approved_signals_only = [] if partial else (
+            [r["signal"] for r in approved] + [r["signal"] for r in probes]
+        )
+        return output, approved_signals_only
 
-        # 提取通过的信号（approve + paper_probe 都执行；probe 已压仓）
-        approved_signals_only = [r["signal"] for r in approved] + [r["signal"] for r in probes]
-        
+    def _persist_review_output(self, output: dict, approved_signals_only: list):
         approved_signals_file = self.data_dir / "approved_signals.json"
         if self.output_file:
-            # 批次/调试模式：自定义输出文件，不进 live review_results，保留直写
             output_file = self.output_file
-            with open(output_file, 'w') as f:
+            with open(output_file, "w") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
-            with open(approved_signals_file, 'w') as f:
+            with open(approved_signals_file, "w") as f:
                 json.dump(approved_signals_only, f, indent=2, ensure_ascii=False)
+            return output_file
+
+        output_file = self.data_dir / "review_results.json"
+        from runtime import datastore as _ds
+        _ds.put_review(
+            output.get("generated_cycle_id") or output.get("timestamp") or "agent_m",
+            output,
+            approved_signals=approved_signals_only,
+            base_dir=self.base_dir,
+        )
+        return output_file
+
+    def run(self):
+        """主流程（弹性负载均衡）"""
+        self.log("开始风险审查...")
+
+        signals = self.load_signals()
+
+        if not signals:
+            self.log("ℹ️  无待审查信号")
+            return
+
+        signal_count = len(signals)
+        self.log(f"📊 发现 {signal_count} 个信号")
+
+        cycle_id = os.environ.get(
+            "PA_CYCLE_ID",
+            f"review_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}",
+        )
+
+        def _flush_partial(results_so_far: list, processed_count: int):
+            buckets = self._bucket_review_results(signals, results_so_far)
+            output, approved_only = self._build_review_output(
+                signals,
+                buckets,
+                cycle_id,
+                partial=True,
+                processed_count=processed_count,
+            )
+            self._persist_review_output(output, approved_only)
+            self.log(
+                f"💾 partial review_results: processed={processed_count}/{signal_count}"
+            )
+
+        if signal_count >= self.CONCURRENT_THRESHOLD:
+            self.log(f"🚀 启用并发处理（{self.MAX_WORKERS} 线程）")
+            results = self._review_concurrent(signals, on_partial=_flush_partial)
         else:
-            # 标准模式：Phase 0 写入收敛，经 datastore 门面写 review_results + approved_signals
-            output_file = self.data_dir / "review_results.json"
-            from runtime import datastore as _ds
-            _ds.put_review(output.get("timestamp") or "agent_m", output,
-                           approved_signals=approved_signals_only, base_dir=self.base_dir)
-        
-        self.log(f"✅ 审查完成: {len(approved)} 通过, {len(rejected)} 拒绝")
-        self.log(f"📊 缓存命中率: {self.cache_hits}/{len(signals)} ({self.cache_hits / len(signals) * 100:.1f}%)")
+            self.log("📝 使用串行处理")
+            results = self._review_sequential(signals, on_partial=_flush_partial)
+
+        buckets = self._bucket_review_results(signals, results)
+        self._emit_review_events(buckets, cycle_id)
+        self.log(
+            f"  [real]  通过 {len(buckets['approved_real'])}, "
+            f"risk_reject {len(buckets['rejected_real'])}"
+        )
+        self.log(
+            f"  [paper] 通过 {len(buckets['approved_paper'])}, "
+            f"risk_reject {len(buckets['rejected_paper'])}"
+        )
+        self.log(
+            f"  [grade] approve {len(buckets['approved'])}, "
+            f"paper_probe {len(buckets['probes'])}, "
+            f"risk_reject {len(buckets['rejected'])}, "
+            f"model_error {len(buckets['model_errors'])}"
+        )
+
+        output, approved_signals_only = self._build_review_output(
+            signals,
+            buckets,
+            cycle_id,
+            partial=False,
+            processed_count=len(results),
+        )
+        output_file = self._persist_review_output(output, approved_signals_only)
+
+        self.log(
+            f"✅ 审查完成: {len(buckets['approved'])} 通过, "
+            f"{len(buckets['rejected'])} risk_reject, "
+            f"{len(buckets['model_errors'])} model_error"
+        )
+        self.log(
+            f"📊 缓存命中率: {self.cache_hits}/{len(signals)} "
+            f"({self.cache_hits / len(signals) * 100:.1f}%)"
+        )
         self.log(f"结果已保存到 {output_file}")
-        self.log(f"通过的信号已保存到 {approved_signals_file}")
+        self.log(f"通过的信号已保存到 {self.data_dir / 'approved_signals.json'}")
     
-    def _review_sequential(self, signals):
+    def _review_sequential(self, signals, on_partial=None):
         """串行处理（信号数 < 3）"""
         results = []
-        for signal in signals:
+        for idx, signal in enumerate(signals, 1):
             result = self.review_signal(signal)
             results.append(result)
+            if on_partial and idx % self.PARTIAL_FLUSH_EVERY == 0:
+                on_partial(results, idx)
         return results
-    
-    def _review_concurrent(self, signals):
+
+    def _review_concurrent(self, signals, on_partial=None):
         """并发处理（信号数 ≥ 3）"""
         results = []
-        
+        processed = 0
+
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
-            # 提交所有任务
             future_to_signal = {
-                executor.submit(self.review_signal, signal): signal 
+                executor.submit(self.review_signal, signal): signal
                 for signal in signals
             }
-            
-            # 收集结果（按完成顺序）
+
             for future in as_completed(future_to_signal):
                 try:
                     result = future.result()
@@ -679,11 +891,14 @@ class AgentM:
                             "risk_points": [f"并发处理异常: {e}"],
                             "failure_probability": 100,
                             "decision": "REJECT",
-                            "explanation": f"并发处理出错: {e}"
+                            "explanation": f"并发处理出错: {e}",
                         },
-                        "reason": f"并发处理出错: {e}"
+                        "reason": f"并发处理出错: {e}",
                     })
-        
+                processed += 1
+                if on_partial and processed % self.PARTIAL_FLUSH_EVERY == 0:
+                    on_partial(results, processed)
+
         return results
 
 def main():
