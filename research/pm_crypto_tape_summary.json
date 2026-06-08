@@ -1,0 +1,23 @@
+{
+  "markets": [
+    {
+      "market_id": "540844",
+      "slug": "will-bitcoin-hit-1m-before-gta-vi-872-424",
+      "asset": "BTC",
+      "points": 60,
+      "low_information": true
+    },
+    {
+      "market_id": "556108",
+      "slug": "will-megaeth-perform-an-airdrop-by-june-30-143-229-513-574-212-254",
+      "asset": "CRYPTO",
+      "points": 60,
+      "low_information": false
+    }
+  ],
+  "missing": [],
+  "total_rows": 120,
+  "market_count": 2,
+  "output_path": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/pm_crypto_price_tape.jsonl",
+  "generated_at": "2026-06-07T05:26:04.007673+00:00"
+}

@@ -1,0 +1,33 @@
+{
+  "symbols": {
+    "BTC": {
+      "rows": 456,
+      "status": "ok",
+      "json_files": 2
+    },
+    "ETH": {
+      "rows": 456,
+      "status": "ok",
+      "json_files": 2
+    },
+    "SOL": {
+      "rows": 0,
+      "status": "missing"
+    }
+  },
+  "missing_symbols": [
+    {
+      "symbol": "SOL",
+      "reason": "no_local_json_or_feather",
+      "fabricated": false
+    }
+  ],
+  "total_rows": 912,
+  "source_counts": {
+    "json": 360,
+    "feather": 552
+  },
+  "feather_available": true,
+  "output_path": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/funding_rates.jsonl",
+  "generated_at": "2026-06-07T05:26:03.987178+00:00"
+}

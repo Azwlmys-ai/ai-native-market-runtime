@@ -1,0 +1,50 @@
+{
+  "version": "p0c-2026-06-06",
+  "layers": {
+    "research": [
+      "agent_g",
+      "agent_learning",
+      "agent_historical_miner",
+      "backtest_analyzer",
+      "agent_codex"
+    ],
+    "trading": [
+      "agent_b",
+      "agent_d",
+      "agent_e",
+      "agent_f",
+      "agent_h",
+      "agent_j",
+      "agent_okx_funding",
+      "agent_k_v2"
+    ],
+    "risk": [
+      "agent_m_primary",
+      "agent_m_secondary"
+    ],
+    "execution": [
+      "agent_p"
+    ],
+    "infrastructure": [
+      "regime_detector",
+      "strategy_manager",
+      "capital_adapter",
+      "agent_a",
+      "agent_i"
+    ]
+  },
+  "agents": {
+    "agent_historical_miner": {
+      "module": "agents/historical_arbitrage_miner.py",
+      "entrypoint": "mine_arbitrage_opportunities",
+      "layer": "research",
+      "llm_agent_id": "agent_historical_miner",
+      "orchestrator_active": false,
+      "trading_agent_dependencies": []
+    },
+    "historical_arbitrage_miner": {
+      "alias_of": "agent_historical_miner",
+      "note": "Legacy script name; canonical agent_id is agent_historical_miner"
+    }
+  }
+}

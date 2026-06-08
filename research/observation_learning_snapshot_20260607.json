@@ -1,0 +1,341 @@
+{
+  "schema_version": "0.1.0-phase3-observation-learning",
+  "generated_at": "2026-06-07T05:09:13.880680+00:00",
+  "principle": "Share Observation, not Experience",
+  "learning_entry": "runtime.observation_learning.compute (parallel to model_effectiveness, not Agent G Experience)",
+  "inputs": {
+    "okx_observation_summary": "/Users/libo/.hermes/polymarket_arbitrage/research/okx_observation_summary.json",
+    "us_etf_observation_summary": "/Users/libo/.hermes/polymarket_arbitrage/research/us_etf_observation_summary.json",
+    "cross_market_discovery_report": "/Users/libo/.hermes/polymarket_arbitrage/research/cross_market_discovery_report.md",
+    "market_intelligence": "/Users/libo/.hermes/polymarket_arbitrage/data/market_intelligence.json",
+    "runtime_db": "/Users/libo/.hermes/polymarket_arbitrage/data/runtime.db"
+  },
+  "stable_correlations": [
+    {
+      "pair": "BTC ↔ ETH",
+      "pearson_lag0": 0.84108102078568,
+      "sample_size": 1617,
+      "confidence": "high",
+      "note": "observation_only — not a trading rule"
+    },
+    {
+      "pair": "QQQ ↔ BTC",
+      "pearson_lag0": 0.4338643010645598,
+      "sample_size": 1109,
+      "confidence": "high",
+      "note": "observation_only — not a trading rule"
+    },
+    {
+      "pair": "TQQQ ↔ BTC",
+      "pearson_lag0": 0.43275216025522667,
+      "sample_size": 1109,
+      "confidence": "high",
+      "note": "observation_only — not a trading rule"
+    },
+    {
+      "pair": "SOXL ↔ BTC",
+      "pearson_lag0": 0.36576557045501634,
+      "sample_size": 1109,
+      "confidence": "high",
+      "note": "observation_only — not a trading rule"
+    }
+  ],
+  "insufficient_samples": [
+    {
+      "area": "BTC ↔ Funding",
+      "sample_size": 60,
+      "reason": "cross_market_pair_underpowered"
+    },
+    {
+      "area": "BTC ↔ PM Crypto (replay proxy)",
+      "sample_size": 0,
+      "reason": "cross_market_pair_underpowered"
+    },
+    {
+      "area": "Gold ↔ BTC",
+      "sample_size": 50,
+      "reason": "cross_market_pair_underpowered"
+    },
+    {
+      "area": "DXY ↔ BTC",
+      "sample_size": 0,
+      "reason": "cross_market_pair_underpowered"
+    },
+    {
+      "area": "US ETF indicators_5m",
+      "sample_size": 0,
+      "reason": "research_db_indicators_empty"
+    }
+  ],
+  "continue_collecting": [
+    {
+      "observation": "BTC ↔ Funding",
+      "priority": "medium",
+      "action": "extend_observation_sampling",
+      "experience_forbidden": true
+    },
+    {
+      "observation": "BTC ↔ PM Crypto (replay proxy)",
+      "priority": "high",
+      "action": "pm_crypto_price_history + PM market match",
+      "experience_forbidden": true
+    },
+    {
+      "observation": "Gold ↔ BTC",
+      "priority": "medium",
+      "action": "extend_observation_sampling",
+      "experience_forbidden": true
+    },
+    {
+      "observation": "DXY ↔ BTC",
+      "priority": "high",
+      "action": "DXY daily series into catalog allowlist",
+      "experience_forbidden": true
+    },
+    {
+      "observation": "US ETF indicators_5m",
+      "priority": "high",
+      "action": "populate tsll_research.db indicators pipeline",
+      "experience_forbidden": true
+    },
+    {
+      "observation": "market_intelligence profiles",
+      "priority": "medium",
+      "action": "consume_shadow_profiles_in_observation_learning_only",
+      "experience_forbidden": true
+    }
+  ],
+  "model_research_candidates": {
+    "garch": {
+      "rationale": "Volatility transmission + OKX hold-time dispersion + runtime vol states",
+      "signals": {
+        "okx_hold_sec_p90": 459.75100016593933,
+        "high_vol_ratio_pairs": [
+          "BTC ↔ Funding",
+          "SOXL ↔ BTC"
+        ],
+        "runtime_volatility_states": true
+      },
+      "priority": "high",
+      "experience_forbidden": true
+    },
+    "hmm": {
+      "rationale": "Regime shifts across BTC/ETH/ETF; existing regime_states table",
+      "signals": {
+        "btc_eth_correlation": 0.84108102078568,
+        "etf_btc_pairs": 3,
+        "runtime_regime_states": true
+      },
+      "priority": "high",
+      "experience_forbidden": true
+    },
+    "pca": {
+      "rationale": "Co-movement among QQQ/TQQQ/SOXL/ETF candle universe",
+      "signals": {
+        "etf_symbols": [
+          "MSTX",
+          "MSTZ",
+          "NVDL",
+          "NVDQ",
+          "SOXL",
+          "SOXS",
+          "TSLL",
+          "TSLQ"
+        ],
+        "etf_candles_total": 3366,
+        "correlated_etf_btc_pairs": [
+          {
+            "pair": "QQQ ↔ BTC",
+            "r": 0.4338643010645598
+          },
+          {
+            "pair": "TQQQ ↔ BTC",
+            "r": 0.43275216025522667
+          },
+          {
+            "pair": "SOXL ↔ BTC",
+            "r": 0.36576557045501634
+          }
+        ]
+      },
+      "priority": "medium",
+      "experience_forbidden": true
+    },
+    "cointegration": {
+      "rationale": "BTC-ETH spread + ETF-BTC lead/lag; existing cointegration module",
+      "signals": {
+        "btc_eth_n": 1617,
+        "btc_eth_r": 0.84108102078568,
+        "funding_lag_signal": -1,
+        "runtime_correlation_signals": true
+      },
+      "priority": "high",
+      "experience_forbidden": true
+    }
+  },
+  "cross_market_pairs": [
+    {
+      "pair": "BTC ↔ ETH",
+      "sample_size": 1617,
+      "pearson_lag0": 0.84108102078568,
+      "spearman_lag0": 0.8268263839198935,
+      "best_lag": 0,
+      "best_lag_pearson": 0.84108102078568,
+      "confidence": "high"
+    },
+    {
+      "pair": "BTC ↔ Funding",
+      "sample_size": 60,
+      "pearson_lag0": -0.11274699951381476,
+      "spearman_lag0": -0.0945818282856349,
+      "best_lag": -1,
+      "best_lag_pearson": 0.30242428677264643,
+      "confidence": "low"
+    },
+    {
+      "pair": "BTC ↔ PM Crypto (replay proxy)",
+      "sample_size": 0,
+      "pearson_lag0": null,
+      "spearman_lag0": null,
+      "best_lag": 0,
+      "best_lag_pearson": null,
+      "confidence": "low"
+    },
+    {
+      "pair": "QQQ ↔ BTC",
+      "sample_size": 1109,
+      "pearson_lag0": 0.4338643010645598,
+      "spearman_lag0": 0.391441976656809,
+      "best_lag": 0,
+      "best_lag_pearson": 0.4338643010645598,
+      "confidence": "high"
+    },
+    {
+      "pair": "TQQQ ↔ BTC",
+      "sample_size": 1109,
+      "pearson_lag0": 0.43275216025522667,
+      "spearman_lag0": 0.39072053566817444,
+      "best_lag": 0,
+      "best_lag_pearson": 0.43275216025522667,
+      "confidence": "high"
+    },
+    {
+      "pair": "SOXL ↔ BTC",
+      "sample_size": 1109,
+      "pearson_lag0": 0.36576557045501634,
+      "spearman_lag0": 0.36559798088023016,
+      "best_lag": 0,
+      "best_lag_pearson": 0.36576557045501634,
+      "confidence": "high"
+    },
+    {
+      "pair": "Gold ↔ BTC",
+      "sample_size": 50,
+      "pearson_lag0": 0.2194435328983689,
+      "spearman_lag0": 0.26626650660264106,
+      "best_lag": -4,
+      "best_lag_pearson": 0.35756625161627775,
+      "confidence": "low"
+    },
+    {
+      "pair": "DXY ↔ BTC",
+      "sample_size": 0,
+      "pearson_lag0": null,
+      "spearman_lag0": null,
+      "best_lag": null,
+      "best_lag_pearson": null,
+      "confidence": "insufficient_data"
+    }
+  ],
+  "market_intelligence_summary": {
+    "available": true,
+    "generated_at": "2026-06-07T12:47:57.115170",
+    "markets_total": 100,
+    "tier_distribution": {
+      "S": 1,
+      "A": 0,
+      "B": 0,
+      "C": 99,
+      "D": 0
+    },
+    "tier_s_count": 1,
+    "tier_c_count": 99,
+    "tradability_mean": 38.7612,
+    "shadow_only": true
+  },
+  "runtime_observation": {
+    "available": true,
+    "market_prices_rows": 5300,
+    "market_prices_distinct_markets": 100,
+    "runtime_events_rows": 11176,
+    "event_type_top": {
+      "signal.generated": 3099,
+      "risk.rejected": 2964,
+      "execution.dry_run": 1953,
+      "signal.reviewed": 1354,
+      "orchestrator.cycle_started": 746,
+      "orchestrator.cycle_completed": 709,
+      "risk.paper_probe": 244,
+      "execution.skipped": 106
+    },
+    "recent_events": [
+      {
+        "type": "execution.dry_run",
+        "agent": "signal_executor",
+        "ts": "2026-06-07T04:58:12.318Z"
+      },
+      {
+        "type": "execution.dry_run",
+        "agent": "signal_executor",
+        "ts": "2026-06-07T04:58:12.318Z"
+      },
+      {
+        "type": "execution.dry_run",
+        "agent": "signal_executor",
+        "ts": "2026-06-07T04:58:12.318Z"
+      },
+      {
+        "type": "risk.model_error",
+        "agent": "agent_m",
+        "ts": "2026-06-07T04:58:12.317Z"
+      },
+      {
+        "type": "risk.paper_probe",
+        "agent": "agent_m",
+        "ts": "2026-06-07T04:58:12.317Z"
+      }
+    ]
+  },
+  "okx_observation_highlights": {
+    "combined_records": 93527,
+    "funding_observations": 180,
+    "top_exit_reasons": [
+      "time_stop",
+      "hard_stop",
+      "trailing_stop",
+      "take_profit",
+      "session_end"
+    ]
+  },
+  "us_etf_observation_highlights": {
+    "candles": 3366,
+    "trades": 38,
+    "symbols": [
+      "MSTX",
+      "MSTZ",
+      "NVDL",
+      "NVDQ",
+      "SOXL",
+      "SOXS",
+      "TSLL",
+      "TSLQ"
+    ]
+  },
+  "forbidden": {
+    "experience_import": true,
+    "write_trading_rules": true,
+    "write_signals": true,
+    "write_review_results": true,
+    "okx_etf_source_mutation": true
+  }
+}

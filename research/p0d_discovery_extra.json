@@ -1,0 +1,94 @@
+{
+  "etf_eth_daily": [
+    {
+      "etf": "QQQ",
+      "n": 1109,
+      "peak": {
+        "lag": 0,
+        "corr": 0.46323556523348497,
+        "n": 1109
+      },
+      "sig": {
+        "t": 17.391,
+        "significant_5pct": true,
+        "n": 1109
+      }
+    },
+    {
+      "etf": "SOXL",
+      "n": 1109,
+      "peak": {
+        "lag": 0,
+        "corr": 0.41670270628251527,
+        "n": 1109
+      },
+      "sig": {
+        "t": 15.252,
+        "significant_5pct": true,
+        "n": 1109
+      }
+    },
+    {
+      "etf": "TQQQ",
+      "n": 1109,
+      "peak": {
+        "lag": 0,
+        "corr": 0.4627579945204514,
+        "n": 1109
+      },
+      "sig": {
+        "t": 17.368,
+        "significant_5pct": true,
+        "n": 1109
+      }
+    },
+    {
+      "etf": "SOXS",
+      "n": 1109,
+      "peak": {
+        "lag": 0,
+        "corr": -0.41601378605874856,
+        "n": 1109
+      },
+      "sig": {
+        "t": -15.221,
+        "significant_5pct": true,
+        "n": 1109
+      }
+    }
+  ],
+  "okx_funding": {
+    "hours": 0,
+    "corr_lag0": NaN,
+    "peak": null,
+    "sig": null
+  },
+  "okx_vol": {
+    "hours": 0,
+    "corr_lag0": NaN,
+    "peak": null,
+    "sig": null
+  },
+  "NVDA_btc_hf": {
+    "n": 14,
+    "peak": {
+      "lag": -3,
+      "corr": NaN,
+      "n": 11
+    },
+    "sig": null,
+    "std_sym": 0.0,
+    "std_btc": 1.0275
+  },
+  "MSTR_btc_hf": {
+    "n": 14,
+    "peak": {
+      "lag": -3,
+      "corr": NaN,
+      "n": 11
+    },
+    "sig": null,
+    "std_sym": 0.0,
+    "std_btc": 1.0275
+  }
+}

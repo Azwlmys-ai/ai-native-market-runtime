@@ -1,0 +1,82 @@
+{
+  "generated_at": "2026-06-07T05:26:08.301902+00:00",
+  "principle": "Share Observation, not Experience",
+  "sources": {
+    "okx_weekly": {
+      "catalog_id": "okx.trades.weekly",
+      "exists": true,
+      "files": 1,
+      "total_bytes": 209646,
+      "latest_mtime": 1780717581.9019587,
+      "paths": [
+        "/Users/libo/shared_intelligence/trades/okx_weekly.jsonl"
+      ]
+    },
+    "okx_trade_memory": {
+      "catalog_id": "okx.trade_memory.export",
+      "exists": true,
+      "files": 1,
+      "total_bytes": 96171540,
+      "latest_mtime": 1780796967.538674,
+      "paths": [
+        "/Users/libo/okx_perp_trader/research/external_exports/okx_trade_memory_2026-06-07/okx_trade_memory_sample.jsonl"
+      ]
+    }
+  },
+  "record_counts": {
+    "okx_weekly": 952,
+    "okx_trade_memory_sample": 92575,
+    "combined": 93527
+  },
+  "volatility": {
+    "pnl_abs_bps_weekly_median": 30.396499999999996,
+    "pnl_abs_bps_weekly_p90": 43.463699999999996,
+    "mae_mfe_spread_median_bps": 10.648209769731354
+  },
+  "funding": {
+    "btc_swap_observations": 180,
+    "mean_rate": 7.2507234184688886e-06,
+    "median_rate": 7.1840560842000005e-06,
+    "min_rate": -0.0001094883251061,
+    "max_rate": 0.0001,
+    "source": "data/historical/okx_BTC_USDT_SWAP_funding_rate_*.json"
+  },
+  "holding_time": {
+    "weekly_minutes_mean": 0.15122899159663866,
+    "weekly_minutes_median": 0.13,
+    "memory_hold_sec_mean": 180.48528644850472,
+    "memory_hold_sec_median": 67.2170000076294,
+    "memory_hold_sec_p90": 459.75100016593933
+  },
+  "exit_reason": {
+    "time_stop": 63347,
+    "hard_stop": 14323,
+    "trailing_stop": 9231,
+    "take_profit": 4824,
+    "session_end": 850
+  },
+  "session_distribution": {
+    "asia": 25556,
+    "overlap": 18980,
+    "us": 22023,
+    "europe": 15157,
+    "late_us": 11811
+  },
+  "symbol_distribution": {
+    "SOL": 36441,
+    "ETH": 31211,
+    "BTC": 25875
+  },
+  "volume_profile_holding_buckets": {
+    "90-300s": 30532,
+    "30-90s": 47050,
+    ">300s": 12906,
+    "<30s": 2087
+  },
+  "excluded": [
+    "experience_review",
+    "learning_feedback",
+    "knowledge",
+    "lessons"
+  ]
+}

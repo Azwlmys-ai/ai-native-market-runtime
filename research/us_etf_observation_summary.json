@@ -1,0 +1,69 @@
+{
+  "generated_at": "2026-06-07T05:26:08.437968+00:00",
+  "principle": "Share Observation, not Experience",
+  "sources": {
+    "etf_trader_db": {
+      "path": "/Users/libo/us-lev-etf-cta/data/sqlite/etf_trader.db",
+      "exists": true
+    },
+    "tsll_research_db": {
+      "path": "/Users/libo/us-lev-etf-cta/data/sqlite/tsll_research.db",
+      "exists": true
+    },
+    "shared_weekly": {
+      "catalog_id": "etf.trades.weekly",
+      "exists": true,
+      "files": 1,
+      "total_bytes": 8698,
+      "latest_mtime": 1780717581.834267,
+      "paths": [
+        "/Users/libo/shared_intelligence/trades/us_etf_weekly.jsonl"
+      ]
+    }
+  },
+  "record_counts": {
+    "candles": 3366,
+    "signals": 49,
+    "trades": 38,
+    "indicators_5m_research": 0
+  },
+  "candles_by_symbol": {
+    "MSTX": 411,
+    "MSTZ": 411,
+    "NVDL": 411,
+    "NVDQ": 411,
+    "SOXL": 411,
+    "SOXS": 411,
+    "TSLL": 489,
+    "TSLQ": 411
+  },
+  "signals_by_strategy": {
+    "long_breakout_v1": 49
+  },
+  "trades": {
+    "holding_hours_mean": 2.445175438596491,
+    "holding_hours_median": 0.75,
+    "session_distribution": {
+      "unknown": 6,
+      "AFTER_HOURS": 1,
+      "OVERNIGHT": 3,
+      "PRE_MARKET": 5,
+      "REGULAR": 23
+    },
+    "close_reason_distribution": {
+      "bandwidth_contracted": 20,
+      "close_below_ema20": 10,
+      "max_holding_time": 8
+    }
+  },
+  "volume_profile": {
+    "recent_candle_volume_mean": 286809.402,
+    "recent_candle_volume_median": 39545.0
+  },
+  "excluded": [
+    "review",
+    "lessons",
+    "diagnostics",
+    "risk_decisions"
+  ]
+}

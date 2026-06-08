@@ -1,0 +1,290 @@
+{
+  "version": "0.1.0",
+  "updated": "2026-06-07",
+  "principle": "Share Observation, not Experience",
+  "consumer_project": "polymarket_arbitrage",
+  "shared_root": "/Users/libo/shared_intelligence",
+  "allowlist": [
+    {
+      "catalog_id": "okx.trade_memory.export",
+      "source_project": "okx_perp_trader",
+      "path": "/Users/libo/okx_perp_trader/research/external_exports/okx_trade_memory_2026-06-07/okx_trade_memory_sample.jsonl",
+      "category": "A",
+      "asset_class": "crypto",
+      "data_type": "explore_trade_observation",
+      "schema": "/Users/libo/okx_perp_trader/research/external_exports/okx_trade_memory_2026-06-07/okx_trade_memory_schema.json",
+      "manifest": "/Users/libo/okx_perp_trader/research/external_exports/okx_trade_memory_2026-06-07/okx_trade_memory_manifest.json",
+      "safety_flag": "external_observation_only",
+      "record_count": 92575,
+      "status": "approved_not_wired",
+      "polymarket_use": "okx_pm_lag_lead_research"
+    },
+    {
+      "catalog_id": "okx.trades.weekly",
+      "source_project": "okx_perp_trader",
+      "path": "/Users/libo/shared_intelligence/trades/okx_weekly.jsonl",
+      "category": "A",
+      "asset_class": "crypto",
+      "data_type": "closed_trade_export",
+      "schema": "/Users/libo/shared_intelligence/schemas/trade_record.schema.json",
+      "status": "active",
+      "polymarket_use": "event_joiner, weekly_kpi, attribution"
+    },
+    {
+      "catalog_id": "okx.market.funding",
+      "source_project": "okx_perp_trader",
+      "path_glob": "/Users/libo/okx_perp_trader/env_rule/user_data/data/okx/futures/*-funding_rate.feather",
+      "category": "A",
+      "asset_class": "crypto",
+      "data_type": "funding_rate_series",
+      "status": "approved_not_wired",
+      "polymarket_use": "macro_volatility_context"
+    },
+    {
+      "catalog_id": "pm.local.funding.historical",
+      "source_project": "polymarket_arbitrage",
+      "path_glob": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/okx_*_USDT_SWAP_funding_rate_*.json",
+      "category": "A",
+      "asset_class": "crypto",
+      "data_type": "funding_rate_series",
+      "safety_flag": "local_observation_only",
+      "status": "active",
+      "polymarket_use": "model_sandbox_funding_lag_source"
+    },
+    {
+      "catalog_id": "pm.local.funding.unified",
+      "source_project": "polymarket_arbitrage",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/funding_rates.jsonl",
+      "category": "A",
+      "asset_class": "crypto",
+      "data_type": "funding_rate_observation",
+      "safety_flag": "local_observation_only",
+      "status": "active",
+      "polymarket_use": "model_sandbox_funding_lag"
+    },
+    {
+      "catalog_id": "pm.local.crypto_price_tape",
+      "source_project": "polymarket_arbitrage",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/pm_crypto_price_tape.jsonl",
+      "category": "A",
+      "asset_class": "prediction_markets",
+      "data_type": "pm_crypto_live_tape",
+      "safety_flag": "local_observation_only",
+      "status": "active",
+      "polymarket_use": "pm_crypto_cross_market"
+    },
+    {
+      "catalog_id": "pm.local.crypto_price_history",
+      "source_project": "polymarket_arbitrage",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/market_price_history.json",
+      "category": "A",
+      "asset_class": "prediction_markets",
+      "data_type": "pm_price_tape_source",
+      "safety_flag": "local_observation_only",
+      "status": "active",
+      "polymarket_use": "pm_crypto_tape_builder_source"
+    },
+    {
+      "catalog_id": "pm.local.crypto_sim_history",
+      "source_project": "polymarket_arbitrage",
+      "path_glob": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/polymarket_*march*april*.json",
+      "category": "A",
+      "asset_class": "prediction_markets",
+      "data_type": "simulated_pm_crypto_history",
+      "safety_flag": "simulated_not_live",
+      "status": "approved_not_wired",
+      "polymarket_use": "pm_crypto_replay_research"
+    },
+    {
+      "catalog_id": "macro.dxy.daily",
+      "source_project": "polymarket_arbitrage",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/dxy_daily.jsonl",
+      "category": "A",
+      "asset_class": "macro",
+      "data_type": "fx_index_daily",
+      "safety_flag": "local_observation_only",
+      "status": "approved_not_wired",
+      "polymarket_use": "cross_market_dxy_btc"
+    },
+    {
+      "catalog_id": "macro.usd_proxy.forex",
+      "source_project": "polymarket_arbitrage",
+      "path_glob": "/Users/libo/.hermes/polymarket_arbitrage/data/historical/forex_*.json",
+      "category": "A",
+      "asset_class": "macro",
+      "data_type": "forex_daily_snapshot",
+      "safety_flag": "local_observation_only",
+      "status": "active",
+      "polymarket_use": "weak_usd_proxy_until_dxy"
+    },
+    {
+      "catalog_id": "okx.market.ohlcv",
+      "source_project": "okx_perp_trader",
+      "path_glob": "/Users/libo/okx_perp_trader/env_rule/user_data/data/okx/futures/*-futures.feather",
+      "category": "A",
+      "asset_class": "crypto",
+      "data_type": "ohlcv_bars",
+      "status": "approved_not_wired",
+      "polymarket_use": "history_replay_enrichment"
+    },
+    {
+      "catalog_id": "okx.execution.samples",
+      "source_project": "okx_perp_trader",
+      "path_glob": "/Users/libo/okx_perp_trader/execution_mvp/samples/okx_public_paper*.jsonl",
+      "category": "A",
+      "asset_class": "crypto",
+      "data_type": "execution_observation_sample",
+      "status": "approved_not_wired",
+      "polymarket_use": "microstructure_reference"
+    },
+    {
+      "catalog_id": "etf.trades.weekly",
+      "source_project": "us_etf_quant",
+      "path": "/Users/libo/shared_intelligence/trades/us_etf_weekly.jsonl",
+      "category": "A",
+      "asset_class": "equities",
+      "data_type": "closed_trade_export",
+      "schema": "/Users/libo/shared_intelligence/schemas/trade_record.schema.json",
+      "status": "active",
+      "polymarket_use": "event_joiner, weekly_kpi"
+    },
+    {
+      "catalog_id": "pm.trades.weekly",
+      "source_project": "polymarket_arbitrage",
+      "path": "/Users/libo/shared_intelligence/trades/polymarket_weekly.jsonl",
+      "category": "A",
+      "asset_class": "prediction_markets",
+      "data_type": "closed_trade_export",
+      "schema": "/Users/libo/shared_intelligence/schemas/trade_record.schema.json",
+      "status": "active",
+      "polymarket_use": "self_export"
+    },
+    {
+      "catalog_id": "shared.events",
+      "source_project": "polymarket_arbitrage",
+      "path_glob": "/Users/libo/shared_intelligence/events/*.json",
+      "category": "A",
+      "asset_class": "cross_market",
+      "data_type": "event_calendar",
+      "schema": "/Users/libo/shared_intelligence/schemas/event.schema.json",
+      "status": "active",
+      "polymarket_use": "event_attribution"
+    },
+    {
+      "catalog_id": "shared.attributed_trades",
+      "source_project": "polymarket_arbitrage",
+      "path": "/Users/libo/shared_intelligence/trades/event_attributed_trades.jsonl",
+      "category": "A",
+      "asset_class": "cross_market",
+      "data_type": "event_attributed_observation",
+      "status": "active",
+      "polymarket_use": "observation_generator"
+    },
+    {
+      "catalog_id": "shared.history.replay",
+      "source_project": "polymarket_arbitrage",
+      "path": "/Users/libo/shared_intelligence/history/replay_dataset.jsonl",
+      "category": "A",
+      "asset_class": "cross_market",
+      "data_type": "historical_replay_observation",
+      "status": "active",
+      "polymarket_use": "phase3_learning"
+    }
+  ],
+  "denylist": [
+    {
+      "catalog_id": "okx.experience.candidates",
+      "path": "/Users/libo/okx_perp_trader/research/experience_learning_candidates.json",
+      "category": "B",
+      "reason": "boost_penalize_ban_rules"
+    },
+    {
+      "catalog_id": "okx.experience.feedback",
+      "path_glob": "/Users/libo/okx_perp_trader/research/vps_learning_feedback_*.json",
+      "category": "B",
+      "reason": "learning_feedback_wrapper"
+    },
+    {
+      "catalog_id": "okx.experience.review",
+      "path_glob": "/Users/libo/okx_perp_trader/research/experience_review_*.md",
+      "category": "B",
+      "reason": "experience_conclusions"
+    },
+    {
+      "catalog_id": "okx.knowledge.atoms",
+      "path_glob": "/Users/libo/okx_perp_trader/research/knowledge/**/*.json",
+      "category": "B",
+      "reason": "knowledge_atoms_edge_risk_conclusions"
+    },
+    {
+      "catalog_id": "okx.attribution.cells",
+      "path_glob": "/Users/libo/okx_perp_trader/research/*cell_attribution*.json",
+      "category": "B",
+      "reason": "cell_edge_attribution"
+    },
+    {
+      "catalog_id": "okx.lessons.weekly",
+      "path_glob": "/Users/libo/okx_perp_trader/research/lessons/weekly_lessons_*.json",
+      "category": "B",
+      "reason": "distilled_weekly_experience"
+    },
+    {
+      "catalog_id": "okx.oos.candidates",
+      "path": "/Users/libo/okx_perp_trader/research/oos_candidates.json",
+      "category": "B",
+      "reason": "oos_validation_candidates"
+    },
+    {
+      "catalog_id": "pm.experience.learned_rules",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/learned_rules.json",
+      "category": "B",
+      "reason": "agent_learning_rules"
+    },
+    {
+      "catalog_id": "pm.experience.knowledge_base",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/learning_knowledge_base.json",
+      "category": "B",
+      "reason": "risk_prompt_enhancement"
+    },
+    {
+      "catalog_id": "pm.experience.rule_weights",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/rule_effectiveness.json",
+      "category": "B",
+      "reason": "rule_weights"
+    },
+    {
+      "catalog_id": "pm.experience.model_effectiveness",
+      "path": "/Users/libo/.hermes/polymarket_arbitrage/data/model_effectiveness.json",
+      "category": "B",
+      "reason": "model_weights_suggestions"
+    },
+    {
+      "catalog_id": "pm.runtime.signals",
+      "path_glob": "/Users/libo/.hermes/polymarket_arbitrage/data/*signals*.json",
+      "category": "C",
+      "reason": "trading_runtime_state"
+    },
+    {
+      "catalog_id": "global.config.secrets",
+      "path_glob": "**/llm_config.json",
+      "category": "D",
+      "reason": "api_keys_and_routing_secrets"
+    }
+  ],
+  "access_policy": {
+    "mode": "read_only",
+    "require_catalog_id": true,
+    "require_schema_validation": true,
+    "require_safety_flag_for_external": true,
+    "forbidden_write_targets": [
+      "data/learned_rules.json",
+      "data/learning_knowledge_base.json",
+      "data/rule_effectiveness.json",
+      "data/model_effectiveness.json",
+      "agents/",
+      "executors/",
+      "risk/",
+      "strategy/"
+    ]
+  }
+}

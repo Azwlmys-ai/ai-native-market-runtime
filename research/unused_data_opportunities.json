@@ -1,0 +1,293 @@
+{
+  "audit_date": "2026-06-07",
+  "project": "/Users/libo/.hermes/polymarket_arbitrage",
+  "scope": "read-only data utilization audit",
+  "summary": {
+    "live_collection_streams": 10,
+    "streams_entering_signal_decision_chain": 3,
+    "streams_entering_exit_decision_chain": 2,
+    "estimated_live_field_utilization_pct": 28,
+    "estimated_persisted_artifact_utilization_pct": 41,
+    "historical_archive_utilization_pct": 4,
+    "primary_bottleneck": "orchestrator._consolidate_signals_for_review replaces signals.json with Agent B only; D/E/F/H/J/K outputs discarded when B produces signals"
+  },
+  "top_20_unused_opportunities": [
+    {
+      "rank": 1,
+      "data_source": "latest_data.us_stocks",
+      "category": "US Stocks",
+      "path": "data/latest_data.json → us_stocks",
+      "record_scale": "8 symbols / cycle",
+      "why_unused": "Collected and snapshotted to asset_price_history.json but never passed to Agent B/M prompt or consolidate",
+      "easiest_integration": true,
+      "potential_value": "high",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 2,
+      "data_source": "market_intelligence.json",
+      "category": "Market Intelligence",
+      "path": "data/market_intelligence.json",
+      "record_scale": "~100 market profiles / cycle",
+      "why_unused": "Orchestrator step 2.5 explicit shadow mode — no downstream consumer",
+      "easiest_integration": true,
+      "potential_value": "high",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 3,
+      "data_source": "latest_data.google_news",
+      "category": "Market Intelligence",
+      "path": "data/latest_data.json → google_news",
+      "record_scale": "full RSS text / cycle",
+      "why_unused": "Agent A collects; no agent reads field in code",
+      "easiest_integration": true,
+      "potential_value": "medium",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 4,
+      "data_source": "asset_price_history.json",
+      "category": "Crypto / US Stocks / Funding",
+      "path": "data/asset_price_history.json",
+      "record_scale": "15 symbols × ~60 points",
+      "why_unused": "Written each cycle; only runtime.cointegration research reads (PA_COINT_SIGNALS off by default); no Agent A–P consumer",
+      "easiest_integration": true,
+      "potential_value": "high",
+      "sample_completeness": "medium",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 5,
+      "data_source": "correlation_signals.json",
+      "category": "Polymarket",
+      "path": "data/correlation_signals.json",
+      "record_scale": "7 pairs / cycle (shadow)",
+      "why_unused": "Cointegration bridge gated by PA_COINT_SIGNALS=0; never reaches Agent M by default",
+      "easiest_integration": true,
+      "potential_value": "high",
+      "sample_completeness": "medium",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 6,
+      "data_source": "regime_states.json",
+      "category": "Regime",
+      "path": "data/regime_states.json",
+      "record_scale": "23 series / cycle",
+      "why_unused": "HMM output enforced=False; regime_detector LLM regime separate and only feeds capital_adapter",
+      "easiest_integration": true,
+      "potential_value": "medium",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 7,
+      "data_source": "volatility_states.json",
+      "category": "Volatility",
+      "path": "data/volatility_states.json",
+      "record_scale": "23 series / cycle",
+      "why_unused": "GARCH output enforced=False; Agent P uses simple vol from market_price_history instead",
+      "easiest_integration": true,
+      "potential_value": "medium",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 8,
+      "data_source": "latest_data.okx full bundle",
+      "category": "Crypto / Funding",
+      "path": "data/latest_data.json → okx + data/okx_data.json",
+      "record_scale": "4 coins spot/perp/funding / cycle",
+      "why_unused": "Agent B only uses btc_funding_rate scalar; ETH/SOL/BNB ignored; D/E/F signals discarded by consolidate",
+      "easiest_integration": true,
+      "potential_value": "high",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 9,
+      "data_source": "shared_intelligence/trades/okx_weekly.jsonl",
+      "category": "Crypto",
+      "path": "/Users/libo/shared_intelligence/trades/okx_weekly.jsonl",
+      "record_scale": "952 lines",
+      "why_unused": "Only analytics/event_joiner.py reads; zero Agent A–P wiring",
+      "easiest_integration": true,
+      "potential_value": "high",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 10,
+      "data_source": "shared_intelligence/trades/us_etf_weekly.jsonl",
+      "category": "ETF",
+      "path": "/Users/libo/shared_intelligence/trades/us_etf_weekly.jsonl",
+      "record_scale": "38 lines",
+      "why_unused": "Same as okx_weekly — offline analytics only",
+      "easiest_integration": true,
+      "potential_value": "medium",
+      "sample_completeness": "low",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 11,
+      "data_source": "data/historical/okx_*_funding_rate_*.json",
+      "category": "Funding",
+      "path": "data/historical/okx_*_SWAP_funding_rate_*.json",
+      "record_scale": "87–93 records/file × multiple months",
+      "why_unused": "Batch archive; no live agent or RiskEngine reader",
+      "easiest_integration": true,
+      "potential_value": "medium",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 12,
+      "data_source": "data/historical/us_stocks_*.json",
+      "category": "US Stocks",
+      "path": "data/historical/us_stocks_march_april_2026.json etc.",
+      "record_scale": "3–10 symbols × months OHLCV",
+      "why_unused": "RiskEngine reads one aggregate file partially; not in Agent B prompt",
+      "easiest_integration": true,
+      "potential_value": "medium",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 13,
+      "data_source": "market_regime.json",
+      "category": "Regime",
+      "path": "data/market_regime.json",
+      "record_scale": "1 object / cycle",
+      "why_unused": "Written by regime_detector; only capital_adapter reads — not in signal or review chain",
+      "easiest_integration": true,
+      "potential_value": "low",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 14,
+      "data_source": "capital_allocation.json",
+      "category": "Other",
+      "path": "data/capital_allocation.json",
+      "record_scale": "1 object / cycle",
+      "why_unused": "Written by capital_adapter; no executor or Agent M reader",
+      "easiest_integration": true,
+      "potential_value": "low",
+      "sample_completeness": "high",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 15,
+      "data_source": "sizing_suggestions.json + rule_effectiveness.json",
+      "category": "Other",
+      "path": "data/sizing_suggestions.json, data/rule_effectiveness.json",
+      "record_scale": "7 suggestions / 6 rules per cycle",
+      "why_unused": "enforcement layer gated PA_ENFORCE_SIZING=0 PA_ENFORCE_WEIGHTS=0",
+      "easiest_integration": true,
+      "potential_value": "medium",
+      "sample_completeness": "medium",
+      "suggested_phase": "A"
+    },
+    {
+      "rank": 16,
+      "data_source": "shared_intelligence/history/replay_dataset.jsonl",
+      "category": "Macro / Market Intelligence",
+      "path": "/Users/libo/shared_intelligence/history/replay_dataset.jsonl",
+      "record_scale": "346 event-window rows",
+      "why_unused": "Offline replay pipeline only",
+      "easiest_integration": false,
+      "potential_value": "high",
+      "sample_completeness": "high",
+      "suggested_phase": "B"
+    },
+    {
+      "rank": 17,
+      "data_source": "okx_trade_memory_sample.jsonl",
+      "category": "Crypto",
+      "path": "/Users/libo/okx_perp_trader/research/external_exports/okx_trade_memory_2026-06-07/okx_trade_memory_sample.jsonl",
+      "record_scale": "92,575 rows",
+      "why_unused": "Catalogued in cross_project_data_catalog.json; not wired",
+      "easiest_integration": false,
+      "potential_value": "high",
+      "sample_completeness": "high",
+      "suggested_phase": "B"
+    },
+    {
+      "rank": 18,
+      "data_source": "data/historical/commodities_*.json",
+      "category": "Commodity",
+      "path": "data/historical/commodities_march_april_2026.json",
+      "record_scale": "~1.2 MB multi-commodity",
+      "why_unused": "Live commodity_forex collector returns empty; archive never read",
+      "easiest_integration": false,
+      "potential_value": "medium",
+      "sample_completeness": "high",
+      "suggested_phase": "B"
+    },
+    {
+      "rank": 19,
+      "data_source": "data/historical/forex_may_2026.json",
+      "category": "Forex",
+      "path": "data/historical/forex_may_2026.json",
+      "record_scale": "6 pairs × May 2026",
+      "why_unused": "Live forex empty; archive unused",
+      "easiest_integration": false,
+      "potential_value": "low",
+      "sample_completeness": "medium",
+      "suggested_phase": "B"
+    },
+    {
+      "rank": 20,
+      "data_source": "whale_trades + onchain + noaa",
+      "category": "Other",
+      "path": "latest_data.whale_trades (missing), config data_sources flags",
+      "record_scale": "0 rows (never populated)",
+      "why_unused": "Agent H expects whale_trades; no collector; schema drift on Agent J",
+      "easiest_integration": false,
+      "potential_value": "medium",
+      "sample_completeness": "none",
+      "suggested_phase": "C"
+    }
+  ],
+  "wasted_categories": {
+    "Commodity": {
+      "live": "commodity_forex_data.json commodities={}",
+      "archive": "data/historical/commodities_*.json (~1.2MB)",
+      "decision_chain_usage": "none"
+    },
+    "Forex": {
+      "live": "commodity_forex_data.json forex={}",
+      "archive": "data/historical/forex_may_2026.json",
+      "decision_chain_usage": "none"
+    },
+    "Funding": {
+      "live_scalar": "btc_funding_rate used by Agent B only",
+      "live_bundle": "okx per-coin funding mostly unused",
+      "archive": "okx_*_funding_rate_*.json unused",
+      "decision_chain_usage": "partial (1 scalar)"
+    },
+    "US_Stocks": {
+      "live": "8 symbols collected; snapshotted only",
+      "archive": "us_stocks_*.json partial RiskEngine read",
+      "decision_chain_usage": "none in agents A-P"
+    },
+    "ETF": {
+      "cross_project": "us_etf_weekly.jsonl 38 lines",
+      "decision_chain_usage": "none"
+    },
+    "Volatility": {
+      "garch": "volatility_states.json computed end-cycle enforced=False",
+      "agent_p": "uses simple rolling vol from market_price_history instead",
+      "decision_chain_usage": "partial (exit only, not GARCH)"
+    },
+    "Regime": {
+      "hmm": "regime_states.json enforced=False",
+      "llm_regime": "market_regime.json → capital_adapter only",
+      "decision_chain_usage": "none in signal/review chain"
+    }
+  }
+}
