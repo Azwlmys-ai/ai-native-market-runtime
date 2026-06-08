@@ -99,6 +99,51 @@ def test_missing_exit_price_does_not_default_to_half_for_realized_pnl(tmp_path):
     assert pp.get_summary()["realized_pnl"] == 0
 
 
+def test_open_trade_records_attribution_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("PA_CYCLE_ID", "cycle-test-001")
+    pp = _portfolio(tmp_path)
+    pp.open_position({
+        "market_id": "attr-1",
+        "market_slug": "attr-market",
+        "direction": "NO",
+        "price": 0.44,
+        "source": "agent_b",
+        "grade": "paper_probe",
+        "source_agent": "agent_b",
+        "signal_origin": "cointegration_bridge",
+        "probe": True,
+        "generated_cycle_id": "cycle-explicit",
+    })
+
+    pos = pp.positions[-1]
+    assert pos.grade == "paper_probe"
+    assert pos.source_agent == "agent_b"
+    assert pos.signal_origin == "cointegration_bridge"
+    assert pos.probe is True
+    assert pos.generated_cycle_id == "cycle-explicit"
+
+    trades = (tmp_path / "data" / "paper_trades.jsonl").read_text().splitlines()
+    trade = json.loads(trades[-1])
+    assert trade["type"] == "open"
+    assert trade["grade"] == "paper_probe"
+    assert trade["source_agent"] == "agent_b"
+    assert trade["signal_origin"] == "cointegration_bridge"
+    assert trade["probe"] is True
+    assert trade["generated_cycle_id"] == "cycle-explicit"
+
+
+def test_probe_inferred_from_grade_when_flag_missing(tmp_path):
+    pp = _portfolio(tmp_path)
+    pp.open_position({
+        "market_id": "attr-2",
+        "market_slug": "probe-inferred",
+        "direction": "YES",
+        "price": 0.55,
+        "grade": "paper_probe",
+    })
+    assert pp.positions[-1].probe is True
+
+
 def test_exit_price_calculates_realized_pnl(tmp_path):
     pp = _portfolio(tmp_path)
     pp.open_position({

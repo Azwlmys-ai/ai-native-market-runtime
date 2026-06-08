@@ -4,6 +4,7 @@ Agent P - 持仓管理监控
 """
 
 import json
+import os
 import sys
 import subprocess
 from pathlib import Path
@@ -59,6 +60,23 @@ def normalize_outcome(value):
     return outcome
 
 
+def _is_dry_run_mode() -> bool:
+    return os.environ.get("EXECUTOR_DRY_RUN", "").lower() in ("1", "true", "yes")
+
+
+def position_dedup_key(pos: dict):
+    """合并去重键：(market_id 或 slug, outcome)。"""
+    mid = str(pos.get("market_id") or "").strip()
+    slug = str(
+        pos.get("market_slug") or pos.get("slug") or pos.get("market") or ""
+    ).strip()
+    outcome = normalize_outcome(pos.get("outcome") or pos.get("direction"))
+    ident = mid or slug
+    if not ident or not outcome:
+        return None
+    return (ident, outcome)
+
+
 def price_from_market(market, outcome):
     outcomes = market.get("outcomes") or []
     prices = market.get("outcome_prices") or []
@@ -109,8 +127,8 @@ class AgentP:
             self.log(f"⚠️  加载配置失败: {e}")
             return {}
     
-    def get_portfolio(self):
-        """获取当前持仓"""
+    def get_pm_trader_portfolio(self) -> list:
+        """从 pm-trader 拉取持仓（legacy / live 快照）。"""
         try:
             result = subprocess.run(
                 [get_pm_trader(), "portfolio"],
@@ -119,21 +137,190 @@ class AgentP:
                 timeout=30,
                 env=get_pm_trader_env()
             )
-            
+
             if result.returncode == 0:
                 data = json.loads(result.stdout)
                 if data.get("ok"):
-                    positions = data.get("data", [])
-                    self.log(f"📊 当前持仓：{len(positions)} 个")
-                    self.save_positions(positions)
-                    return positions
-            
+                    return data.get("data", [])
+
             self.log(f"❌ 获取持仓失败: {result.stderr}")
             return []
-        
+
         except Exception as e:
             self.log(f"❌ 获取持仓异常: {e}")
             return []
+
+    def load_paper_open_positions(self) -> list[dict]:
+        """读取 paper_portfolio.json 中未平仓的 paper 持仓。"""
+        portfolio_file = self.data_dir / "paper_portfolio.json"
+        if not portfolio_file.exists():
+            return []
+        try:
+            with open(portfolio_file) as f:
+                raw = json.load(f)
+        except Exception as e:
+            self.log(f"⚠️  加载 paper_portfolio 失败: {e}")
+            return []
+
+        open_positions = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            if item.get("closed_at"):
+                continue
+            if str(item.get("status", "")).lower() == "closed":
+                continue
+            open_positions.append(item)
+        return open_positions
+
+    def _resolve_current_price_no_fallback(self, pos, latest_data=None):
+        """解析当前市价；无可靠价格时返回 None（不用 entry 价冒充现价）。"""
+        for key in ("live_price", "current_price"):
+            price = valid_price(pos.get(key))
+            if price is not None:
+                return price, "current_price"
+
+        for key in ("mid", "bid", "ask"):
+            price = valid_price(pos.get(key))
+            if price is not None:
+                return price, key
+
+        latest_data = latest_data or {}
+        markets = latest_data.get("polymarket_markets") or []
+        market_id = str(pos.get("market_id") or "").strip()
+        market_slug = str(pos.get("market_slug") or "").strip()
+        market_question = str(
+            pos.get("market_question") or pos.get("market_name") or ""
+        ).strip()
+
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            latest_ids = {
+                str(market.get("id") or "").strip(),
+                str(market.get("market_id") or "").strip(),
+            }
+            latest_slugs = {
+                str(market.get("slug") or "").strip(),
+                str(market.get("market_slug") or "").strip(),
+            }
+            latest_question = str(
+                market.get("question") or market.get("market_question") or ""
+            ).strip()
+            matched = (
+                bool(market_id and market_id in latest_ids)
+                or bool(market_slug and market_slug in latest_slugs)
+                or bool(market_question and market_question == latest_question)
+            )
+            if not matched:
+                continue
+
+            price = price_from_market(market, pos.get("outcome"))
+            if price is not None:
+                return price, "market_price"
+
+        for key in ("last_known_price", "last_price", "previous_price", "mark_price"):
+            price = valid_price(pos.get(key))
+            if price is not None:
+                return price, key
+
+        return None, "missing"
+
+    def normalize_paper_position(self, raw: dict, latest_data: dict | None = None) -> dict:
+        """将 paper_portfolio 条目归一化为 Agent P analyze_positions 可识别格式。"""
+        latest_data = latest_data or {}
+        market_slug = str(
+            raw.get("market_slug") or raw.get("slug") or raw.get("market") or ""
+        )
+        outcome = str(raw.get("direction") or raw.get("outcome") or "").lower()
+        entry = valid_price(raw.get("entry_price") or raw.get("avg_entry_price")) or 0.0
+
+        probe_pos = {
+            "market_id": str(raw.get("market_id") or ""),
+            "market_slug": market_slug,
+            "outcome": outcome,
+            "market_question": raw.get("market_name") or raw.get("question") or "",
+        }
+        current_price, _ = self._resolve_current_price_no_fallback(probe_pos, latest_data)
+        percent_pnl = 0.0
+        if current_price is not None and entry > 0:
+            percent_pnl = (current_price - entry) / entry * 100.0
+
+        shares = raw.get("shares")
+        if shares is None:
+            shares = raw.get("position_size")
+
+        return {
+            "market_id": str(raw.get("market_id") or ""),
+            "market_slug": market_slug,
+            "slug": market_slug,
+            "market": str(raw.get("market") or market_slug),
+            "outcome": outcome,
+            "avg_entry_price": entry,
+            "entry_price": entry,
+            "shares": shares,
+            "position_size": raw.get("position_size"),
+            "opened_at": raw.get("opened_at", ""),
+            "source": raw.get("source", ""),
+            "grade": raw.get("grade", ""),
+            "source_agent": raw.get("source_agent", ""),
+            "signal_origin": raw.get("signal_origin", ""),
+            "generated_cycle_id": raw.get("generated_cycle_id", ""),
+            "probe": raw.get("probe", False),
+            "live_price": current_price,
+            "percent_pnl": percent_pnl,
+            "status": "open",
+            "portfolio_source": "paper_portfolio",
+            "dry_run": True,
+        }
+
+    def merge_portfolios(
+        self,
+        pm_positions: list,
+        paper_raw: list[dict],
+        latest_data: dict | None = None,
+    ) -> list:
+        """pm-trader + paper 合并去重（pm-trader 优先）。"""
+        latest_data = latest_data or self.load_latest_data()
+        merged: list = []
+        seen: set[tuple] = set()
+
+        for pos in pm_positions:
+            key = position_dedup_key(pos)
+            if key:
+                seen.add(key)
+            merged.append(pos)
+
+        for raw in paper_raw:
+            norm = self.normalize_paper_position(raw, latest_data)
+            key = position_dedup_key(norm)
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            merged.append(norm)
+
+        return merged
+
+    def get_portfolio(self):
+        """获取当前持仓；dry-run 下合并 paper_portfolio open 仓。"""
+        pm_positions = self.get_pm_trader_portfolio()
+
+        if not _is_dry_run_mode():
+            self.log(f"📊 当前持仓：{len(pm_positions)} 个")
+            self.save_positions(pm_positions)
+            return pm_positions
+
+        paper_raw = self.load_paper_open_positions()
+        latest_data = self.load_latest_data()
+        merged = self.merge_portfolios(pm_positions, paper_raw, latest_data)
+        self.log(
+            f"📊 pm_trader_positions={len(pm_positions)} "
+            f"paper_positions={len(paper_raw)} "
+            f"merged_positions={len(merged)}"
+        )
+        self.save_positions(merged)
+        return merged
 
     def save_positions(self, positions):
         """保存最新持仓快照，供策略和健康检查使用。
@@ -395,7 +582,10 @@ class AgentP:
         ]
         skipped = before - len(positions)
         if skipped:
-            self.log(f"⏭️  跳过 {skipped} 个已关闭持仓（来自 closed registry 或 status=closed）")
+            self.log(
+                f"⏭️  跳过 {skipped} 个已关闭持仓（来自 closed registry 或 status=closed）"
+            )
+        self.log(f"skipped_closed={skipped}")
 
         # 加载动态策略配置
         strategy_config = self.load_strategy_config()

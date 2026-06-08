@@ -11,6 +11,7 @@ No complex PnL, no real-time mark-to-market, no equity curve, no UI.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,11 @@ class PaperPosition:
     notional_usd: float
     opened_at: str            # ISO-8601
     source: str = ""
+    grade: str = ""
+    source_agent: str = ""
+    signal_origin: str = ""
+    generated_cycle_id: str = ""
+    probe: bool = False
     market_slug: str = ""
     slug: str = ""
     market: str = ""
@@ -86,6 +92,23 @@ class PaperPosition:
             signal.get("market_id"),
             signal.get("market_evidence", {}).get("market_slug"),
         ])
+        grade = str(signal.get("grade") or "")
+        source_agent = str(
+            signal.get("source_agent") or signal.get("source") or ""
+        )
+        signal_origin = str(
+            signal.get("signal_origin") or signal.get("origin") or ""
+        )
+        generated_cycle_id = str(
+            signal.get("generated_cycle_id")
+            or os.environ.get("PA_CYCLE_ID", "")
+            or ""
+        )
+        probe = bool(
+            signal.get("probe")
+            or grade == "paper_probe"
+            or signal.get("tier") == "paper_probe"
+        )
         return PaperPosition(
             market_id=str(signal.get("market_id", "")),
             market_name=str(signal.get("market_name") or question),
@@ -95,6 +118,11 @@ class PaperPosition:
             notional_usd=notional,
             opened_at=datetime.now(timezone.utc).isoformat(),
             source=str(signal.get("source", "")),
+            grade=grade,
+            source_agent=source_agent,
+            signal_origin=signal_origin,
+            generated_cycle_id=generated_cycle_id,
+            probe=probe,
             market_slug=market_slug,
             slug=market_slug,
             market=market,
@@ -111,7 +139,8 @@ class PaperPosition:
         allowed = [
             "market_id", "market_name", "direction", "entry_price",
             "position_size", "notional_usd", "opened_at", "source",
-            "market_slug", "slug", "market", "question", "title",
+            "grade", "source_agent", "signal_origin", "generated_cycle_id",
+            "probe", "market_slug", "slug", "market", "question", "title",
             "market_aliases", "closed_at", "exit_price", "price_source",
             "realized_pnl", "close_reason", "synthetic", "dry_run",
         ]
@@ -182,6 +211,11 @@ class PaperPortfolio:
             "size": pos.position_size,
             "notional_usd": pos.notional_usd,
             "source": pos.source,
+            "grade": pos.grade,
+            "source_agent": pos.source_agent,
+            "signal_origin": pos.signal_origin,
+            "generated_cycle_id": pos.generated_cycle_id,
+            "probe": pos.probe,
         })
 
         print(
