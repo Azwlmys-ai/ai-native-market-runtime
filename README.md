@@ -2,6 +2,21 @@
 
 A dry-run-first, non-production runtime for coordinating AI agents across market data collection, signal review, risk snapshots, simulated execution, visualization, and learning feedback.
 
+## Current Phase
+
+**`STABLE OBSERVATION PHASE`** (since 2026-06-10)
+
+Final Validation completed: **24/24** parallel cycles (Paper Loop + Cross Market + Crypto Beta). Agent B Hedged Race V1 fixed LLM hang (timeout 83% → 0%). Postmortems: **28**.
+
+| Component | Status |
+|-----------|--------|
+| Paper Loop | Stable (24/24 exit=0) |
+| Agent B Hedged Race V1 | Fixed (0% timeout) |
+| Cross Market Research V0 | Stable (24/24) |
+| Crypto Beta Attribution V0 | Stable (24/24) |
+
+See [PROJECT_STATUS.md](./PROJECT_STATUS.md) and [CHECKPOINT_FINAL_VALIDATION.md](./CHECKPOINT_FINAL_VALIDATION.md) for details.
+
 ## Screenshots
 
 Runtime dashboard overview:
@@ -99,7 +114,11 @@ The public screenshot paths are reserved for:
 ├── docs/images/            # Public README screenshot assets
 ├── orchestrator.py         # Runtime coordinator
 ├── main.py                 # Entry point
-├── SYSTEM_ARCHITECTURE.md  # Architecture details
+├── PROJECT_STATUS.md       # Current phase and component status
+├── ARCHITECTURE.md         # Hedged Race, Cross Market, Crypto Beta layers
+├── CHECKPOINT_FINAL_VALIDATION.md  # Final validation checkpoint
+├── CHANGELOG.md            # Release history
+├── SYSTEM_ARCHITECTURE.md  # 18-step orchestrator pipeline
 ├── AGENT_PIPELINE.md       # Pipeline and agent status map
 ├── DRY_RUN_VALIDATION.md   # Dry-run validation summary
 └── LIMITATIONS.md          # Safety and scope limitations
@@ -140,11 +159,14 @@ Nothing in this repository is financial advice. The project makes no profitabili
 
 ## Documentation Links
 
-- [System Architecture](./SYSTEM_ARCHITECTURE.md)
+- [Project Status](./PROJECT_STATUS.md) — current phase and module status
+- [Architecture](./ARCHITECTURE.md) — Agent B Hedged Race, Cross Market, Crypto Beta
+- [Final Validation Checkpoint](./CHECKPOINT_FINAL_VALIDATION.md)
+- [Changelog](./CHANGELOG.md)
+- [System Architecture](./SYSTEM_ARCHITECTURE.md) — 18-step pipeline
 - [Agent Pipeline](./AGENT_PIPELINE.md)
 - [Dry-Run Validation](./DRY_RUN_VALIDATION.md)
 - [Limitations](./LIMITATIONS.md)
-- [GitHub Release Plan](./reports/github_release_plan.md)
 
 ## License / Disclaimer
 
