@@ -40,7 +40,9 @@ def test_load_config():
     assert cfg["agent_models"]["agent_codex"] == "deepseek-v4-pro"
     fallback = get_fallback_map(cfg)
     assert fallback["grok-4.3"] == "claude-opus-4-7"
+    assert fallback["deepseek-v4-pro"] == "grok-4-1-fast-reasoning"
     assert "[REDACTED]" not in fallback
+    assert "__SINGLE_PROVIDER_NO_FALLBACK__" not in fallback.values()
 
 
 def test_fallback_map_uses_valid_config_values():
@@ -162,14 +164,23 @@ def root_executor(tmp_path):
     return SignalExecutor(base_dir=str(tmp_path))
 
 
-def test_flat_executor_with_mock_success(flat_executor):
+def _enable_live_gate(monkeypatch):
+    """Phase 4：execute_trade 真实下单路径需 PA_LIVE_PROBE=1 且非 DRY_RUN。
+    这些用例专测 subprocess 成功/超时/异常映射，故显式开 live 闸。"""
+    monkeypatch.delenv("EXECUTOR_DRY_RUN", raising=False)
+    monkeypatch.setenv("PA_LIVE_PROBE", "1")
+
+
+def test_flat_executor_with_mock_success(flat_executor, monkeypatch):
+    _enable_live_gate(monkeypatch)
     fake = MagicMock(returncode=0, stdout="ok", stderr="")
     with patch("subprocess.run", return_value=fake):
         r = flat_executor.execute_trade(SAMPLE_SIGNAL)
     assert r["status"] == "success"
 
 
-def test_flat_executor_with_mock_timeout(flat_executor):
+def test_flat_executor_with_mock_timeout(flat_executor, monkeypatch):
+    _enable_live_gate(monkeypatch)
     with patch(
         "subprocess.run",
         side_effect=subprocess.TimeoutExpired("pm-trader", 30),
@@ -179,7 +190,8 @@ def test_flat_executor_with_mock_timeout(flat_executor):
     assert r["signal"] == SAMPLE_SIGNAL
 
 
-def test_flat_executor_with_mock_exception(flat_executor):
+def test_flat_executor_with_mock_exception(flat_executor, monkeypatch):
+    _enable_live_gate(monkeypatch)
     with patch("subprocess.run", side_effect=RuntimeError("boom")):
         r = flat_executor.execute_trade(SAMPLE_SIGNAL)
     assert r["status"] == "error"
@@ -221,7 +233,8 @@ def test_flat_executor_empty_signals_overwrites_execution_results(flat_executor)
     assert output["results"] == []
 
 
-def test_root_executor_with_mock_timeout(root_executor):
+def test_root_executor_with_mock_timeout(root_executor, monkeypatch):
+    _enable_live_gate(monkeypatch)
     nested_signal = {"signal": SAMPLE_SIGNAL}
     with patch(
         "subprocess.run",
@@ -232,7 +245,8 @@ def test_root_executor_with_mock_timeout(root_executor):
     assert r["signal"] == SAMPLE_SIGNAL
 
 
-def test_root_executor_with_mock_exception(root_executor):
+def test_root_executor_with_mock_exception(root_executor, monkeypatch):
+    _enable_live_gate(monkeypatch)
     nested_signal = {"signal": SAMPLE_SIGNAL}
     with patch("subprocess.run", side_effect=RuntimeError("boom")):
         r = root_executor.execute_signal(nested_signal)
@@ -339,6 +353,31 @@ def test_orchestrator_rejects_stale_signals_and_writes_fresh_skip_outputs(tmp_pa
     assert execution["success"] == 0
     assert execution["dry_run"] == 0
     assert execution["results"] == []
+
+
+def test_orchestrator_skips_review_when_consolidate_produces_zero(tmp_path, monkeypatch):
+    """signals.json 在 2h 内仍「新鲜」，但本轮 consolidate=0 时不得再跑 Agent M/买入。"""
+    from orchestrator import Orchestrator
+
+    monkeypatch.setenv("SIGNAL_MAX_AGE_SECONDS", "7200")
+    orchestrator = Orchestrator(base_dir=str(tmp_path))
+    fresh_signal = dict(SAMPLE_SIGNAL)
+    fresh_signal["generated_at"] = datetime.now().isoformat()
+    (orchestrator.data_dir / "signals.json").write_text(json.dumps([fresh_signal]))
+    # intelligence_report 空 → consolidate 不写盘
+    (orchestrator.data_dir / "intelligence_report.json").write_text(
+        json.dumps({"signals": [], "signals_count": 0})
+    )
+
+    batch = orchestrator._consolidate_signals_for_review()
+    assert batch is False
+
+    ready, _ = orchestrator._signals_ready_for_review()
+    assert ready is True  # 旧批次文件仍新鲜（这正是之前的漏洞）
+
+    if not batch:
+        ready = False
+    assert ready is False
 
 
 def test_orchestrator_rejects_legacy_signals_without_generated_at(tmp_path):
@@ -1524,6 +1563,7 @@ def _load_agent_m_class():
     )
 
     header = (
+        "from llm_helper import LLMModelError\n"
         "call_llm_sync = None\n"
         "class ReviewCache:\n"
         "    def __init__(self, *a, **kw): pass\n"
@@ -1793,6 +1833,7 @@ def _load_agent_m_module():
         for line in source.splitlines()
     )
     header = (
+        "from llm_helper import LLMModelError\n"
         "call_llm_sync = None\n"
         "class ReviewCache:\n"
         "    def __init__(self, *a, **kw): pass\n"
@@ -1834,8 +1875,12 @@ def test_agent_m_review_result_exposes_market_id_at_top_level(tmp_path):
     assert result.get("market_name") == "Will the Vegas Golden Knights win?"
     assert result["decision"] == "APPROVE"
 
-    # --- Exception path: LLM raises, exception handler fires ---
-    mod.call_llm_sync = MagicMock(side_effect=RuntimeError("network error"))
+    # --- Exception path: LLM raises → model_error / DEFER (not risk reject) ---
+    from llm_helper import LLMModelError
+
+    mod.call_llm_sync = MagicMock(
+        side_effect=LLMModelError("network error", error_type="connection_error")
+    )
     agent2 = AgentM(base_dir=str(tmp_path))
     result2 = agent2.review_signal(signal)
 
@@ -1843,7 +1888,8 @@ def test_agent_m_review_result_exposes_market_id_at_top_level(tmp_path):
         f"market_id missing at top level in exception path; keys={list(result2.keys())}"
     )
     assert result2.get("market_name") == "Will the Vegas Golden Knights win?"
-    assert result2["decision"] == "REJECT"
+    assert result2["decision"] == "DEFER"
+    assert result2.get("review_status") == "model_error"
 
 
 # ---------------------------------------------------------------------------

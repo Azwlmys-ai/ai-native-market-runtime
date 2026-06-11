@@ -160,9 +160,10 @@ def test_catalog_validates_funding_unified():
         "observation_only": True,
     }
     validate_row("pm.local.funding.unified", row, None)
-    out = ROOT / "data" / "historical" / "funding_rates.jsonl"
-    if out.exists():
-        cat = ObservationCatalog()
+    # 按 resolve_paths 的**实存**判定（stat['exists'] 仅表示路径已解析），缺数据环境下不读：
+    cat = ObservationCatalog()
+    fpaths = cat.get_entry("pm.local.funding.unified").resolve_paths()
+    if fpaths and any(p.exists() for p in fpaths):
         rows = cat.read_jsonl("pm.local.funding.unified", limit=2)
         assert rows[0]["observation_only"] is True
 

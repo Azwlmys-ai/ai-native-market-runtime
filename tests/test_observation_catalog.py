@@ -15,6 +15,18 @@ from runtime.observation_catalog import (
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _skip_if_absent(cat, catalog_id):
+    """目录条目数据文件不可见（如外部 shared_intelligence 未挂载/不存在）时 skip，
+    而非 FileNotFoundError——使套件在缺数据环境（含沙箱）下仍诚实通过。
+    注：stat()['exists'] 仅表示路径已解析、不代表文件真在盘上，故按 resolve_paths 实存判定。"""
+    try:
+        paths = cat.get_entry(catalog_id).resolve_paths()
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"catalog resolve failed for {catalog_id}: {exc}")
+    if not paths or not any(Path(p).exists() for p in paths):
+        pytest.skip(f"catalog data absent for {catalog_id}")
+
+
 def test_catalog_loads_allowlist():
     cat = ObservationCatalog()
     entries = cat.list_allowlist()
@@ -38,6 +50,7 @@ def test_denylist_blocks_experience_path():
 
 def test_read_okx_weekly_schema():
     cat = ObservationCatalog()
+    _skip_if_absent(cat, "okx.trades.weekly")
     rows = cat.read_jsonl("okx.trades.weekly", limit=3)
     assert len(rows) == 3
     assert rows[0]["source"] == "okx"
@@ -47,6 +60,8 @@ def test_read_okx_weekly_schema():
 def test_trade_record_validation_rejects_extra_fields():
     cat = ObservationCatalog()
     schema = cat.get_entry("okx.trades.weekly").schema_path
+    if not schema or not Path(schema).exists():
+        pytest.skip("trade_record schema file absent (env without shared_intelligence)")
     bad = {
         "source": "okx",
         "symbol": "BTC",

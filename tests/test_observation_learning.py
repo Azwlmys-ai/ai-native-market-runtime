@@ -69,6 +69,8 @@ def test_catalog_does_not_write_source_projects(tmp_path):
     entry = cat.get_entry("okx.trades.weekly")
     paths = entry.resolve_paths()
     assert paths
+    if not paths[0].exists():
+        pytest.skip("okx.trades.weekly source absent (env without shared_intelligence)")
     before = paths[0].stat().st_mtime
     time.sleep(0.01)
     rows = cat.read_jsonl("okx.trades.weekly", limit=1)

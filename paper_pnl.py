@@ -666,7 +666,14 @@ def _price_from_market_outcomes(market: dict, direction: str) -> Optional[float]
 _GLOBAL_PORTFOLIO: Optional[PaperPortfolio] = None
 
 
-def get_paper_portfolio() -> PaperPortfolio:
+def get_paper_portfolio(base_dir: Optional[Path] = None) -> PaperPortfolio:
+    """默认（base_dir=None）返回进程级全局单例（生产路径，行为不变）。
+
+    显式传 base_dir 时返回一个**该目录作用域的独立实例**（不缓存为全局单例），
+    用于隔离场景（如测试 base_dir=tmp）——避免读到真实全局组合。生产路径不传参，零变化。
+    """
+    if base_dir is not None:
+        return PaperPortfolio(base_dir=base_dir)
     global _GLOBAL_PORTFOLIO
     if _GLOBAL_PORTFOLIO is None:
         _GLOBAL_PORTFOLIO = PaperPortfolio()

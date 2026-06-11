@@ -23,8 +23,17 @@ class SignalExecutor:
         self.logs_dir = self.base_dir / "logs"
         self.data_dir.mkdir(exist_ok=True)
         self.logs_dir.mkdir(exist_ok=True)
-        
+
+        # 组合作用域：生产（base_dir=None）走全局单例，行为不变；显式传 base_dir
+        # （如测试 tmp）作用域到该目录 → 去重/开仓不再泄漏到真实全局组合。
+        # 在**调用时**经 get_paper_portfolio 解析（而非 init 时缓存），以兼容测试对该函数的 patch。
+        self._scoped_base = Path(base_dir) if base_dir else None
+
         self.trader_path = get_pm_trader()
+
+    def _get_portfolio(self):
+        """调用时解析 PaperPortfolio：生产=全局单例；显式 base_dir=该目录作用域实例。"""
+        return get_paper_portfolio(self._scoped_base)
     
     def log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -65,7 +74,7 @@ class SignalExecutor:
             self.log("⚠️  dedup 检查跳过：signal 无 market_id/slug")
             return False
         try:
-            for pos in get_paper_portfolio().get_open_positions():
+            for pos in self._get_portfolio().get_open_positions():
                 pos_mid = str(pos.market_id or "").strip()
                 pos_slug = str(pos.market_slug or pos.slug or "").strip()
                 pos_dir = (pos.direction or "").upper()
@@ -151,7 +160,7 @@ class SignalExecutor:
             self._write_paper_trade(signal, cycle_id)
             # 记录虚拟持仓到 PaperPortfolio
             try:
-                pp = get_paper_portfolio()
+                pp = self._get_portfolio()
                 pp.open_position(signal)
             except Exception as e:
                 self.log(f"⚠️ paper_pnl 记录失败: {e}")
