@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from _paths import get_base_dir, get_pm_trader, get_pm_trader_env
 from paper_pnl import get_paper_portfolio
+from runtime import live_probe as _live
 
 
 class SellExecutor:
@@ -127,6 +128,10 @@ class SellExecutor:
                 record = self._build_trade_record(signal, normalized, result.stdout, "success")
                 self._append_json_log(self.data_dir / "trade_log.json", record)
                 self._append_json_log(self.data_dir / "sell_log.json", record)
+                if _live.live_enabled():
+                    pnl_usd = _live.estimate_sell_pnl_usd(signal)
+                    if pnl_usd:
+                        _live.record_live_sell_pnl(pnl_usd, base_dir=self.base_dir)
                 return {
                     "status": "success",
                     "signal": signal,
@@ -205,6 +210,9 @@ class SellExecutor:
             json.dump(output, f, indent=2, ensure_ascii=False)
         return output
 
+    def _stop_trading_active(self) -> bool:
+        return (self.data_dir / "STOP_TRADING").exists()
+
     def run(self):
         signals = self.load_sell_signals()
         if not signals:
@@ -212,7 +220,22 @@ class SellExecutor:
             self._write_sell_execution_results(total=0, results=[])
             return
 
-        results = [self.execute_sell(signal) for signal in signals]
+        stop_active = self._stop_trading_active()
+        cfg = _live.gates()
+        filtered, skipped_stop = [], 0
+        for sig in signals:
+            if _live.should_allow_live_sell(sig, stop_active, cfg):
+                filtered.append(sig)
+            else:
+                skipped_stop += 1
+                self.log(
+                    f"⏭️  STOP_TRADING 阻断非 urgent 卖出: "
+                    f"{sig.get('market_slug') or sig.get('market')} ({sig.get('priority')})"
+                )
+        if skipped_stop:
+            self.log(f"⚖️  live 卖出门控：放行 {len(filtered)}/{len(signals)}（urgent 止损优先）")
+
+        results = [self.execute_sell(signal) for signal in filtered]
         output = self._write_sell_execution_results(total=len(signals), results=results)
 
         self.log(

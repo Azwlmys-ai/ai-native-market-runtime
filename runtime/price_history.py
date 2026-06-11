@@ -46,6 +46,33 @@ def series_for(history: dict, market_id: str, field: str = "yes_price") -> List[
     return out
 
 
+def load_asset_history(base_dir=None) -> dict:
+    """外部资产价格历史事实源（Phase 3f-x）：data/asset_price_history.json
+    形如 {symbol: [{ts, price, kind}, ...]}。供跨资产协整研究。"""
+    base = Path(base_dir) if base_dir else get_base_dir()
+    p = base / "data" / "asset_price_history.json"
+    if not p.exists():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def asset_series_for(history: dict, symbol: str) -> List[float]:
+    """取某外部资产的价格序列（过滤 None / 非数值）。"""
+    out: List[float] = []
+    for pt in history.get(str(symbol) or "", []) or []:
+        v = pt.get("price")
+        try:
+            if v is not None:
+                out.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def realized_volatility(series: List[float]) -> Optional[float]:
     """近窗口已实现波动 = 相邻价格变动的样本标准差。
 

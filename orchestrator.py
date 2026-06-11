@@ -762,6 +762,8 @@ class Orchestrator:
         # agent_m 并发审查多信号，需长于单条 LLM；agent_f 多市场串行 LLM
         if agent_name == "agent_m":
             timeout = 600
+        elif agent_name == "agent_b":
+            timeout = 180  # buffer above LLM 120s — audit: grok tail latency 21–79s, kills at 120s wall
         elif agent_name == "agent_f":
             timeout = 180
         elif agent_name in ("regime_detector", "capital_adapter"):
@@ -773,6 +775,10 @@ class Orchestrator:
         cycle_id = getattr(self, "_current_cycle_id", "")
         if cycle_id:
             env["PA_CYCLE_ID"] = cycle_id
+
+        b_started_at = None
+        if agent_name == "agent_b":
+            b_started_at = datetime.now()
 
         try:
             import subprocess
@@ -790,19 +796,67 @@ class Orchestrator:
                 self.log(f"✅ {agent_name} 执行成功")
             else:
                 self.log(f"❌ {agent_name} 执行失败: {result.stderr}")
+            b_status = "success" if ok else "error"
 
         except subprocess.TimeoutExpired:
             self.log(f"⏱️  {agent_name} 执行超时")
             ok = False
+            b_status = "timeout"
         except Exception as e:
             self.log(f"❌ {agent_name} 执行异常: {e}")
             ok = False
+            b_status = "error"
 
         if agent_name == "agent_b":
             self._agent_b_ok_this_cycle = ok
+            if b_started_at is not None:
+                self._record_agent_b_runtime(
+                    cycle_id=cycle_id,
+                    started_at=b_started_at,
+                    status=b_status,
+                    timeout_limit_sec=timeout,
+                )
         elif agent_name == "agent_m":
             self._agent_m_ok_this_cycle = ok
         return ok
+
+    def _record_agent_b_runtime(
+        self,
+        *,
+        cycle_id: str,
+        started_at: datetime,
+        status: str,
+        timeout_limit_sec: int,
+    ) -> None:
+        """Append Agent B wall-clock stats (research/ops only, no trading impact)."""
+        ended_at = datetime.now()
+        duration_sec = round((ended_at - started_at).total_seconds(), 2)
+        entry = {
+            "cycle_id": cycle_id or ended_at.isoformat(),
+            "started_at": started_at.isoformat(),
+            "ended_at": ended_at.isoformat(),
+            "duration_sec": duration_sec,
+            "status": status,
+            "timed_out": status == "timeout",
+            "timeout_limit_sec": timeout_limit_sec,
+        }
+        stats_path = self.data_dir / "agent_b_runtime_stats.json"
+        try:
+            if stats_path.exists():
+                payload = json.loads(stats_path.read_text(encoding="utf-8"))
+            else:
+                payload = {"runs": [], "timeout_limit_sec": timeout_limit_sec}
+            runs = payload.get("runs") or []
+            runs.append(entry)
+            payload["runs"] = runs[-500:]
+            payload["last_updated"] = ended_at.isoformat()
+            payload["timeout_limit_sec"] = timeout_limit_sec
+            stats_path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            self.log(f"⚠️  agent_b_runtime_stats 写入失败: {exc}")
     
     def _run_collector(self, collector_name):
         """运行数据采集器"""

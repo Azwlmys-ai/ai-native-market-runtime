@@ -59,6 +59,7 @@ def _conn() -> sqlite3.Connection:
 _EXPECTED_COLUMNS = {
     "paper_positions": {"canonical_market_id": "TEXT"},  # Phase 2a
     "postmortems": {"hypothesis_verdict": "TEXT"},        # Phase 3c-2
+    "signals": {"models_used": "TEXT"},                   # Phase 3f-loop：真实模型标签
 }
 
 
@@ -129,16 +130,19 @@ def upsert_signals(cycle_id: str, signals: list[dict]) -> None:
                 """INSERT INTO signals
                    (signal_uid, cycle_id, market_id, market_slug, market_name, direction,
                     price, confidence, expected_value, position_size, source, reason,
-                    logic_chain, risk_notes, learned_rule_match, data_sources, generated_at, raw_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    logic_chain, risk_notes, learned_rule_match, data_sources, models_used,
+                    generated_at, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(signal_uid) DO UPDATE SET
                      cycle_id=excluded.cycle_id, price=excluded.price,
-                     confidence=excluded.confidence, raw_json=excluded.raw_json""",
+                     confidence=excluded.confidence, models_used=excluded.models_used,
+                     raw_json=excluded.raw_json""",
                 (su, cycle_id, str(s.get("market_id") or ""), s.get("market_slug"),
                  s.get("market_name"), s.get("direction"), _f(s.get("price")),
                  _f(s.get("confidence")), _f(s.get("expected_value")), _f(s.get("position_size")),
                  s.get("source"), _txt(s.get("reason")), _j(s.get("logic_chain")), _txt(s.get("risk_notes")),
                  _j(s.get("learned_rule_match")), _j(s.get("data_sources")),
+                 _j(s.get("models_used")) if s.get("models_used") is not None else None,
                  s.get("generated_at") or s.get("timestamp"), _j(s)),
             )
 
@@ -503,6 +507,313 @@ def upsert_postmortem(rec: dict) -> None:
              1 if rec.get("model_issue") else 0, rec.get("hypothesis_verdict"),
              rec.get("source"), rec.get("closed_at"), _j(rec)),
         )
+
+
+# ---------------------------------------------------------------------------
+# model_effectiveness（Phase 3e）：每周期重算的有效性快照，按 (scope,key) 幂等 upsert
+# ---------------------------------------------------------------------------
+
+def upsert_model_effectiveness(report: dict) -> None:
+    """把一份有效性报告的 by_rule/by_family/by_agent 全部条目 upsert 进影子表。
+    每条按 row_uid=hash(scope|key) 幂等，重算覆盖旧快照（stale key 仍在，靠 generated_at 区分）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        # 快照语义：整表重建，避免历史 stale key（如标签修正前的旧键）残留。
+        c.execute("DELETE FROM model_effectiveness")
+        for scope, items in (("model", report.get("by_model", [])),
+                             ("rule", report.get("by_rule", [])),
+                             ("family", report.get("by_family", [])),
+                             ("agent", report.get("by_agent", []))):
+            for e in items or []:
+                row_uid = _ds.uid(scope, e.get("key"))
+                c.execute(
+                    """INSERT INTO model_effectiveness
+                       (row_uid, scope, key, n_trades, n_win, n_loss, n_flat, win_rate,
+                        total_realized_pnl, avg_realized_pnl, avg_expected_edge, avg_confidence,
+                        edge_realization, liquidity_issue_rate, timing_issue_rate, model_issue_rate,
+                        edge_decayed, effectiveness, generated_at, raw_json)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(row_uid) DO UPDATE SET
+                         n_trades=excluded.n_trades, n_win=excluded.n_win, n_loss=excluded.n_loss,
+                         n_flat=excluded.n_flat, win_rate=excluded.win_rate,
+                         total_realized_pnl=excluded.total_realized_pnl,
+                         avg_realized_pnl=excluded.avg_realized_pnl,
+                         avg_expected_edge=excluded.avg_expected_edge,
+                         avg_confidence=excluded.avg_confidence,
+                         edge_realization=excluded.edge_realization,
+                         liquidity_issue_rate=excluded.liquidity_issue_rate,
+                         timing_issue_rate=excluded.timing_issue_rate,
+                         model_issue_rate=excluded.model_issue_rate,
+                         edge_decayed=excluded.edge_decayed, effectiveness=excluded.effectiveness,
+                         generated_at=excluded.generated_at, raw_json=excluded.raw_json""",
+                    (row_uid, scope, e.get("key"), e.get("n_trades"), e.get("n_win"),
+                     e.get("n_loss"), e.get("n_flat"), _f(e.get("win_rate")),
+                     _f(e.get("total_realized_pnl")), _f(e.get("avg_realized_pnl")),
+                     _f(e.get("avg_expected_edge")), _f(e.get("avg_confidence")),
+                     _f(e.get("edge_realization")), _f(e.get("liquidity_issue_rate")),
+                     _f(e.get("timing_issue_rate")), _f(e.get("model_issue_rate")),
+                     1 if (e.get("decay") or {}).get("edge_decayed") else 0,
+                     e.get("effectiveness"), gen, _j(e)),
+                )
+
+
+def query_model_effectiveness(scope: Optional[str] = None, limit: int = 500) -> list[dict]:
+    if scope:
+        return _rows(
+            "SELECT * FROM model_effectiveness WHERE scope=? ORDER BY n_trades DESC, total_realized_pnl DESC LIMIT ?",
+            (scope, limit))
+    return _rows(
+        "SELECT * FROM model_effectiveness ORDER BY scope, n_trades DESC LIMIT ?", (limit,))
+
+
+# ---------------------------------------------------------------------------
+# rule_weights（Phase 3e-2）：规则权重建议快照，按 (scope,key) 幂等、整表重建
+# ---------------------------------------------------------------------------
+
+def upsert_rule_weights(report: dict) -> None:
+    """把权重建议报告的 by_rule/by_family 全部条目写进影子表（快照语义整表重建）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        c.execute("DELETE FROM rule_weights")
+        for scope, items in (("rule", report.get("by_rule", [])),
+                             ("family", report.get("by_family", []))):
+            for e in items or []:
+                row_uid = _ds.uid(scope, e.get("key"))
+                c.execute(
+                    """INSERT INTO rule_weights
+                       (row_uid, scope, key, effectiveness, n_trades, win_rate, total_realized_pnl,
+                        edge_decayed, weight, recommendation, rationale, generated_at, raw_json)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (row_uid, scope, e.get("key"), e.get("effectiveness"), e.get("n_trades"),
+                     _f(e.get("win_rate")), _f(e.get("total_realized_pnl")),
+                     1 if e.get("edge_decayed") else 0, _f(e.get("weight")),
+                     e.get("recommendation"), _txt(e.get("rationale")), gen, _j(e)),
+                )
+
+
+def query_rule_weights(scope: Optional[str] = None, limit: int = 500) -> list[dict]:
+    if scope:
+        return _rows(
+            "SELECT * FROM rule_weights WHERE scope=? ORDER BY weight ASC, n_trades DESC LIMIT ?",
+            (scope, limit))
+    return _rows("SELECT * FROM rule_weights ORDER BY scope, weight ASC LIMIT ?", (limit,))
+
+
+# ---------------------------------------------------------------------------
+# correlation_signals（Phase 3f）：协整/spread 研究候选快照，整表重建
+# ---------------------------------------------------------------------------
+
+def upsert_correlation_signals(report: dict) -> None:
+    """把协整研究报告的 candidates 全部写进影子表（快照语义整表重建）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        c.execute("DELETE FROM correlation_signals")
+        for s in report.get("candidates", []) or []:
+            ev = s.get("evidence", {}) or {}
+            c.execute(
+                """INSERT INTO correlation_signals
+                   (signal_uid, model, method, market_a, market_b, beta, corr, zscore,
+                    ar1_phi, half_life, confidence, expected_edge, direction,
+                    data_sufficiency, n_points, generated_at, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (s.get("signal_uid"), (s.get("models_used") or [None])[0], s.get("method"),
+                 (s.get("source_markets") or [None, None])[0],
+                 (s.get("source_markets") or [None, None])[1],
+                 _f(ev.get("beta")), _f(ev.get("corr")), _f(ev.get("zscore")),
+                 _f(ev.get("ar1_phi")), _f(ev.get("half_life")), _f(s.get("confidence")),
+                 _f(s.get("expected_edge")), s.get("direction"), s.get("data_sufficiency"),
+                 ev.get("n_points"), gen, _j(s)),
+            )
+
+
+def query_correlation_signals(limit: int = 500) -> list[dict]:
+    return _rows(
+        "SELECT * FROM correlation_signals ORDER BY ABS(zscore) DESC LIMIT ?", (limit,))
+
+
+# ---------------------------------------------------------------------------
+# regime_states（Phase 3g）：HMM 市场状态识别研究产物快照，整表重建
+# ---------------------------------------------------------------------------
+
+def upsert_regime_states(report: dict) -> None:
+    """把 HMM regime 报告的 regimes 全部写进影子表（快照语义整表重建）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        c.execute("DELETE FROM regime_states")
+        for s in report.get("regimes", []) or []:
+            ev = s.get("evidence", {}) or {}
+            c.execute(
+                """INSERT INTO regime_states
+                   (signal_uid, model, method, series_id, series_kind, current_regime,
+                    regime_shift, news_driven, regime_confident, confidence, separation,
+                    posterior_certainty, n_obs, data_sufficiency, generated_at, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (s.get("signal_uid"), (s.get("models_used") or [None])[0], s.get("method"),
+                 s.get("series_id"), s.get("series_kind"), s.get("current_regime"),
+                 1 if s.get("regime_shift") else 0, 1 if s.get("news_driven") else 0,
+                 1 if s.get("regime_confident") else 0, _f(s.get("confidence")),
+                 _f(ev.get("separation")), _f(ev.get("posterior_certainty")),
+                 ev.get("n_obs"), s.get("data_sufficiency"), gen, _j(s)),
+            )
+
+
+def query_regime_states(regime: Optional[str] = None, limit: int = 500) -> list[dict]:
+    if regime:
+        return _rows(
+            "SELECT * FROM regime_states WHERE current_regime=? "
+            "ORDER BY confidence DESC LIMIT ?", (regime, limit))
+    return _rows(
+        "SELECT * FROM regime_states ORDER BY regime_shift DESC, news_driven DESC, "
+        "confidence DESC LIMIT ?", (limit,))
+
+
+# ---------------------------------------------------------------------------
+# regime_effectiveness（Phase 3g-loop）：regime 有效性快照，按 regime 幂等、整表重建
+# ---------------------------------------------------------------------------
+
+def upsert_regime_effectiveness(report: dict) -> None:
+    """把 regime 有效性报告的 by_regime 写进影子表（快照语义整表重建）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        c.execute("DELETE FROM regime_effectiveness")
+        for e in report.get("by_regime", []) or []:
+            c.execute(
+                """INSERT INTO regime_effectiveness
+                   (row_uid, regime, n_trades, n_win, n_loss, n_flat, win_rate,
+                    total_realized_pnl, avg_realized_pnl, avg_realized_return,
+                    avg_expected_edge, avg_confidence, edge_realization, model_issue_rate,
+                    edge_decayed, effectiveness, generated_at, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (_ds.uid(e.get("key")), e.get("key"), e.get("n_trades"), e.get("n_win"),
+                 e.get("n_loss"), e.get("n_flat"), _f(e.get("win_rate")),
+                 _f(e.get("total_realized_pnl")), _f(e.get("avg_realized_pnl")),
+                 _f(e.get("avg_realized_return")), _f(e.get("avg_expected_edge")),
+                 _f(e.get("avg_confidence")), _f(e.get("edge_realization")),
+                 _f(e.get("model_issue_rate")),
+                 1 if (e.get("decay") or {}).get("edge_decayed") else 0,
+                 e.get("effectiveness"), gen, _j(e)),
+            )
+
+
+def query_regime_effectiveness(limit: int = 500) -> list[dict]:
+    return _rows(
+        "SELECT * FROM regime_effectiveness ORDER BY n_trades DESC, "
+        "total_realized_pnl DESC LIMIT ?", (limit,))
+
+
+# ---------------------------------------------------------------------------
+# volatility_states（Phase 3h）：GARCH 波动率研究产物快照，整表重建
+# ---------------------------------------------------------------------------
+
+def upsert_volatility_states(report: dict) -> None:
+    """把 GARCH 波动率报告的 states 全部写进影子表（快照语义整表重建）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        c.execute("DELETE FROM volatility_states")
+        for s in report.get("states", []) or []:
+            ev = s.get("evidence", {}) or {}
+            c.execute(
+                """INSERT INTO volatility_states
+                   (signal_uid, model, method, series_id, series_kind, risk_state, vol_trend,
+                    clustering, vol_spike, alpha, beta, persistence, long_run_vol, current_vol,
+                    forecast_vol, vol_ratio, confidence, n_obs, data_sufficiency,
+                    generated_at, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (s.get("signal_uid"), (s.get("models_used") or [None])[0], s.get("method"),
+                 s.get("series_id"), s.get("series_kind"), s.get("risk_state"), s.get("vol_trend"),
+                 1 if s.get("clustering") else 0, 1 if s.get("vol_spike") else 0,
+                 _f(ev.get("alpha")), _f(ev.get("beta")), _f(ev.get("persistence")),
+                 _f(ev.get("long_run_vol")), _f(ev.get("current_vol")), _f(ev.get("forecast_vol")),
+                 _f(ev.get("vol_ratio")), _f(s.get("confidence")), ev.get("n_obs"),
+                 s.get("data_sufficiency"), gen, _j(s)),
+            )
+
+
+def query_volatility_states(risk_state: Optional[str] = None, limit: int = 500) -> list[dict]:
+    if risk_state:
+        return _rows(
+            "SELECT * FROM volatility_states WHERE risk_state=? "
+            "ORDER BY confidence DESC LIMIT ?", (risk_state, limit))
+    return _rows(
+        "SELECT * FROM volatility_states ORDER BY vol_spike DESC, persistence DESC, "
+        "confidence DESC LIMIT ?", (limit,))
+
+
+# ---------------------------------------------------------------------------
+# sizing_suggestions（Phase 3i）：Kelly+Markowitz 仓位建议快照，整表重建
+# ---------------------------------------------------------------------------
+
+def upsert_sizing_suggestions(report: dict) -> None:
+    """把仓位建议报告的 suggestions 全部写进影子表（快照语义整表重建）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        c.execute("DELETE FROM sizing_suggestions")
+        for s in report.get("suggestions", []) or []:
+            c.execute(
+                """INSERT INTO sizing_suggestions
+                   (signal_uid, market_id, expected_edge, variance, variance_source, regime,
+                    kelly_raw, kelly_fraction, regime_scaler, sized_fraction, markowitz_weight,
+                    confidence, generated_at, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(signal_uid) DO UPDATE SET
+                     sized_fraction=excluded.sized_fraction,
+                     markowitz_weight=excluded.markowitz_weight, raw_json=excluded.raw_json""",
+                (s.get("signal_uid"), s.get("market_id"), _f(s.get("expected_edge")),
+                 _f(s.get("variance")), s.get("variance_source"), s.get("regime"),
+                 _f(s.get("kelly_raw")), _f(s.get("kelly_fraction")), _f(s.get("regime_scaler")),
+                 _f(s.get("sized_fraction")), _f(s.get("markowitz_weight")),
+                 _f(s.get("confidence")), gen, _j(s)),
+            )
+
+
+def query_sizing_suggestions(limit: int = 500) -> list[dict]:
+    return _rows(
+        "SELECT * FROM sizing_suggestions ORDER BY sized_fraction DESC LIMIT ?", (limit,))
+
+
+# ---------------------------------------------------------------------------
+# enforcement_audit（Phase 5）：纸面强制层逐条调整快照，整表重建
+# ---------------------------------------------------------------------------
+
+def upsert_enforcement_audit(report: dict) -> None:
+    """把强制审计报告的 adjustments 全部写进影子表（快照语义整表重建）。"""
+    gen = report.get("generated_at")
+    c = _conn()
+    with c:
+        c.execute("DELETE FROM enforcement_audit")
+        for a in report.get("adjustments", []) or []:
+            row_uid = _ds.uid("enforce", a.get("market_id"), a.get("signal_uid"))
+            weight = (a.get("weight") or {}).get("weight")
+            recommendation = (a.get("weight") or {}).get("recommendation")
+            sized_fraction = (a.get("sizing") or {}).get("sized_fraction")
+            regime = (a.get("sizing") or {}).get("regime")
+            c.execute(
+                """INSERT INTO enforcement_audit
+                   (row_uid, market_id, market_name, signal_uid, pair_id, source, applied,
+                    original_position_size, final_position_size, weight, recommendation,
+                    sized_fraction, regime, generated_at, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(row_uid) DO UPDATE SET
+                     final_position_size=excluded.final_position_size,
+                     applied=excluded.applied, raw_json=excluded.raw_json""",
+                (row_uid, _txt(a.get("market_id")), _txt(a.get("market_name")),
+                 _txt(a.get("signal_uid")), _txt(a.get("pair_id")), a.get("source"),
+                 _j(a.get("applied")), _f(a.get("original_position_size")),
+                 _f(a.get("final_position_size")), _f(weight), recommendation,
+                 _f(sized_fraction), regime, gen, _j(a)),
+            )
+
+
+def query_enforcement_audit(limit: int = 500) -> list[dict]:
+    return _rows(
+        "SELECT * FROM enforcement_audit ORDER BY final_position_size DESC LIMIT ?", (limit,))
 
 
 def positions_summary() -> dict:

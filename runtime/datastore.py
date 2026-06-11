@@ -147,6 +147,15 @@ def put_review(cycle_id: str, review_result: dict, approved_signals: Optional[li
 #   (owner: signal_executor / sell_executor；orchestrator 的 skipped 占位也走这里)
 # ---------------------------------------------------------------------------
 
+def put_approved_signals(approved_signals: list, base_dir: Optional[Path] = None) -> None:
+    """重写 approved_signals.json（执行器输入）。Phase 3f-loop Fix1：配对完整性执行门用。
+
+    这是 Agent M 审查**之后**的执行门，对协整裸腿做剔除；只改执行器输入文件，
+    不改 review_results.json（审查决策的审计记录保持原样）。经门面原子落盘。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "approved_signals.json", approved_signals)
+
+
 def record_executions(cycle_id: str, results: dict, side: str = "BUY",
                       base_dir: Optional[Path] = None) -> None:
     """写执行结果聚合对象。side=BUY→execution_results.json，SELL→sell_execution_results.json。
@@ -245,6 +254,89 @@ def append_hypothesis(record: dict, base_dir: Optional[Path] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 模型有效性  (owner: runtime.model_effectiveness) — Phase 3e
+# ---------------------------------------------------------------------------
+
+def write_model_effectiveness(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/model_effectiveness.json（事实源）+ upsert 影子 model_effectiveness 表。
+
+    report 为 model_effectiveness.compute() 产出的聚合报告（by_rule/by_family/by_agent）。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "model_effectiveness.json", report)
+    _shadow_call("upsert_model_effectiveness", report)
+
+
+def write_rule_weights(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/rule_effectiveness.json（建议产物）+ upsert 影子 rule_weights 表。
+
+    report 为 rule_weights.compute() 产出的权重建议（by_rule/by_family + summary）。
+    ⚠ 仅建议，enforced=False，不接入 live 交易链路。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "rule_effectiveness.json", report)
+    _shadow_call("upsert_rule_weights", report)
+
+
+def write_correlation_signals(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/correlation_signals.json（研究产物）+ upsert 影子 correlation_signals 表。
+
+    report 为 cointegration.compute() 产出的协整/spread 研究候选（candidates + 元信息）。
+    ⚠ 研究产物，enforced=False，不接入 live 交易链路。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "correlation_signals.json", report)
+    _shadow_call("upsert_correlation_signals", report)
+
+
+def write_regime_states(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/regime_states.json（研究产物）+ upsert 影子 regime_states 表。
+
+    report 为 regime_hmm.compute() 产出的 HMM 市场状态识别快照（regimes + 元信息）。
+    ⚠ 研究产物，enforced=False，不接入 live 交易链路。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "regime_states.json", report)
+    _shadow_call("upsert_regime_states", report)
+
+
+def write_regime_effectiveness(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/regime_effectiveness.json（学习产物）+ upsert 影子 regime_effectiveness 表。
+
+    report 为 regime_effectiveness.compute() 产出的 regime 有效性聚合（by_regime + 元信息）。
+    ⚠ 学习产物，enforced=False，不接入 live 交易链路。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "regime_effectiveness.json", report)
+    _shadow_call("upsert_regime_effectiveness", report)
+
+
+def write_volatility_states(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/volatility_states.json（研究产物）+ upsert 影子 volatility_states 表。
+
+    report 为 garch.compute() 产出的 GARCH(1,1) 波动率/风险状态快照（states + 元信息）。
+    ⚠ 研究产物，enforced=False，不接入 live 交易链路。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "volatility_states.json", report)
+    _shadow_call("upsert_volatility_states", report)
+
+
+def write_sizing_suggestions(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/sizing_suggestions.json（建议产物）+ upsert 影子 sizing_suggestions 表。
+
+    report 为 position_sizing.compute() 产出的 Kelly+Markowitz 仓位建议（suggestions + 元信息）。
+    ⚠ 建议产物，enforced=False，不接入 agent_m/executor/probe 仓位。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "sizing_suggestions.json", report)
+    _shadow_call("upsert_sizing_suggestions", report)
+
+
+def write_enforcement_audit(report: dict, base_dir: Optional[Path] = None) -> None:
+    """整体替换 data/enforcement_audit.json（纸面强制层审计）+ upsert 影子 enforcement_audit 表。
+
+    report 为 enforcement.enforce_signals() 产出的逐条 position_size 调整审计（adjustments + 门控）。
+    ⚠ 仅在 env 门控 PA_ENFORCE_* 开启时由 orchestrator 调用；只改 position_size，不绕过 Agent M/dry-run。
+    """
+    _atomic_write_json(_data_dir(base_dir) / "enforcement_audit.json", report)
+    _shadow_call("upsert_enforcement_audit", report)
+
+
+# ---------------------------------------------------------------------------
 # 市场价格历史  (owner: orchestrator/agent_a) — Phase 3b
 # ---------------------------------------------------------------------------
 
@@ -279,6 +371,38 @@ def record_market_prices(points: list[dict], base_dir: Optional[Path] = None, ca
 
 
 # ---------------------------------------------------------------------------
+# 外部资产价格历史  (owner: orchestrator) — Phase 3f-x 跨资产协整
+# ---------------------------------------------------------------------------
+
+def record_asset_prices(points: list, base_dir: Optional[Path] = None, cap: int = 60) -> None:
+    """记录外部资产（加密/美股/宏观）价格滚动历史，供跨资产协整研究。
+
+    事实源：data/asset_price_history.json —— {symbol: [{ts, price, kind}, ...]}，
+    每 symbol 滚动保留最近 cap 个点（与 market_price_history 同构，体积有界）。
+    纯 json 事实源（研究输入），不落影子表。points: [{symbol, ts, price, kind}, ...]。
+    """
+    hist_path = _data_dir(base_dir) / "asset_price_history.json"
+    hist: dict = {}
+    if hist_path.exists():
+        try:
+            hist = json.loads(hist_path.read_text(encoding="utf-8"))
+            if not isinstance(hist, dict):
+                hist = {}
+        except Exception:
+            hist = {}
+    for p in points:
+        sym = str(p.get("symbol") or "")
+        price = p.get("price")
+        if not sym or price is None:
+            continue
+        series = hist.setdefault(sym, [])
+        series.append({"ts": p.get("ts"), "price": price, "kind": p.get("kind")})
+        if len(series) > cap:
+            del series[:-cap]
+    _atomic_write_json(hist_path, hist)
+
+
+# ---------------------------------------------------------------------------
 # 事件 runtime_events.jsonl  (委托 event_logger，append 语义不变)
 # ---------------------------------------------------------------------------
 
@@ -304,4 +428,8 @@ __all__ = [
     "put_signals", "put_review", "record_executions", "mark_orders_processed",
     "put_sell_signals", "set_positions", "upsert_closed_positions",
     "save_portfolio", "append_paper_trade", "write_status", "emit_event", "uid",
+    "append_postmortem", "append_hypothesis", "record_market_prices",
+    "write_model_effectiveness", "write_rule_weights", "write_correlation_signals",
+    "put_approved_signals", "record_asset_prices", "write_regime_states",
+    "write_regime_effectiveness", "write_volatility_states", "write_sizing_suggestions",
 ]

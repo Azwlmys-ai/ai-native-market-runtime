@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS signals (
     risk_notes      TEXT,
     learned_rule_match TEXT,
     data_sources    TEXT,                      -- 原 list → json 文本
+    models_used     TEXT,                      -- Phase 3f-loop：真实模型标签 json 数组（如 ["cointegration"]）
     generated_at    TEXT,
     raw_json        TEXT    NOT NULL,
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -285,10 +286,245 @@ CREATE INDEX IF NOT EXISTS idx_hyp_signal ON hypotheses(signal_uid);
 CREATE INDEX IF NOT EXISTS idx_hyp_canon  ON hypotheses(canonical_market_id);
 
 -- ----------------------------------------------------------------------------
+-- 11. model_effectiveness — 模型/规则有效性聚合（Phase 3e：Learning Runtime）
+--    每行 = 一个 (scope, key) 的有效性快照。scope ∈ rule/family/agent。
+--    由 runtime.model_effectiveness.compute() 每周期末重算 upsert（按 row_uid 幂等）。
+--    纯分析旁路：不参与执行/审批；模型标签当前来自 signals.learned_rule_match/source。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS model_effectiveness (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_uid             TEXT NOT NULL UNIQUE,   -- hash(scope|key)
+    scope               TEXT,                   -- rule / family / agent
+    key                 TEXT,                   -- 规则名 / 规则族 / agent id
+    n_trades            INTEGER,
+    n_win               INTEGER,
+    n_loss              INTEGER,
+    n_flat              INTEGER,
+    win_rate            REAL,
+    total_realized_pnl  REAL,
+    avg_realized_pnl    REAL,
+    avg_expected_edge   REAL,
+    avg_confidence      REAL,
+    edge_realization    REAL,
+    liquidity_issue_rate REAL,
+    timing_issue_rate   REAL,
+    model_issue_rate    REAL,
+    edge_decayed        INTEGER DEFAULT 0,
+    effectiveness       TEXT,                   -- effective/ineffective/marginal/decayed/inconclusive/insufficient
+    generated_at        TEXT,
+    raw_json            TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_me_scope ON model_effectiveness(scope);
+CREATE INDEX IF NOT EXISTS idx_me_eff   ON model_effectiveness(effectiveness);
+
+-- ----------------------------------------------------------------------------
+-- 12. rule_weights — 规则权重建议（Phase 3e-2：淘汰失效模型雏形）
+--    每行 = 一个 (scope, key) 的权重建议快照。由 runtime.rule_weights.compute()
+--    从 model_effectiveness 派生，每周期末重算 upsert（快照语义整表重建）。
+--    ⚠ 仅建议产物，enforced=0（未接入 live 交易链路）。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS rule_weights (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_uid             TEXT NOT NULL UNIQUE,   -- hash(scope|key)
+    scope               TEXT,                   -- rule / family
+    key                 TEXT,
+    effectiveness       TEXT,
+    n_trades            INTEGER,
+    win_rate            REAL,
+    total_realized_pnl  REAL,
+    edge_decayed        INTEGER DEFAULT 0,
+    weight              REAL,                   -- 建议权重乘子（0.25..1.10）
+    recommendation      TEXT,                   -- keep/explore/down_weight/retire_candidate
+    rationale           TEXT,
+    generated_at        TEXT,
+    raw_json            TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rw_scope ON rule_weights(scope);
+CREATE INDEX IF NOT EXISTS idx_rw_rec   ON rule_weights(recommendation);
+
+-- ----------------------------------------------------------------------------
+-- 13. correlation_signals — 协整/spread 研究候选（Phase 3f：第一个真实模型）
+--    每行 = 一条配对协整研究信号快照。由 runtime.cointegration.compute() 每周期重算
+--    （快照语义整表重建）。⚠ 研究产物 enforced=0，未接入 live 交易链路。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS correlation_signals (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_uid        TEXT NOT NULL UNIQUE,   -- hash(model|market_a|market_b)
+    model             TEXT,                   -- cointegration
+    method            TEXT,                   -- engle_granger_lite
+    market_a          TEXT,
+    market_b          TEXT,
+    beta              REAL,
+    corr              REAL,
+    zscore            REAL,
+    ar1_phi           REAL,
+    half_life         REAL,
+    confidence        REAL,
+    expected_edge     REAL,
+    direction         TEXT,
+    data_sufficiency  TEXT,                   -- low / medium
+    n_points          INTEGER,
+    generated_at      TEXT,
+    raw_json          TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cs_model ON correlation_signals(model);
+CREATE INDEX IF NOT EXISTS idx_cs_z     ON correlation_signals(zscore);
+
+-- ----------------------------------------------------------------------------
+-- 14. regime_states — HMM 市场状态识别研究产物（Phase 3g：第二个真实模型）
+--    每行 = 一条价格序列（PM 市场或外部资产）的当前 regime 快照。由
+--    runtime.regime_hmm.compute() 每周期重算（快照语义整表重建）。
+--    ⚠ 研究产物 enforced=0，未接入 live 交易链路。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS regime_states (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_uid        TEXT NOT NULL UNIQUE,   -- hash(model|series_id)
+    model             TEXT,                   -- hmm
+    method            TEXT,                   -- gaussian_hmm_baum_welch
+    series_id         TEXT,                   -- 市场 id 或资产 symbol
+    series_kind       TEXT,                   -- pm_market / crypto / us_stock / macro
+    current_regime    TEXT,                   -- calm / turbulent / normal
+    regime_shift      INTEGER DEFAULT 0,      -- 末点是否刚发生状态切换
+    news_driven       INTEGER DEFAULT 0,      -- turbulent 态 + 异常跳变
+    regime_confident  INTEGER DEFAULT 0,      -- 方差分离 + 后验是否显著
+    confidence        REAL,
+    separation        REAL,                   -- turbulent_std / calm_std
+    posterior_certainty REAL,
+    n_obs             INTEGER,
+    data_sufficiency  TEXT,                   -- low / medium
+    generated_at      TEXT,
+    raw_json          TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rs_regime ON regime_states(current_regime);
+CREATE INDEX IF NOT EXISTS idx_rs_kind   ON regime_states(series_kind);
+
+-- ----------------------------------------------------------------------------
+-- 15. regime_effectiveness — regime 有效性聚合（Phase 3g-loop：regime 学习闭环）
+--    每行 = 一个 regime 桶的有效性快照（postmortems × 市场 regime 标签）。由
+--    runtime.regime_effectiveness.compute() 每周期末重算（快照语义整表重建）。
+--    ⚠ 学习产物 enforced=0，未接入 live 交易链路。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS regime_effectiveness (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_uid             TEXT NOT NULL UNIQUE,   -- hash(regime)
+    regime              TEXT,                   -- calm / turbulent / normal / unknown
+    n_trades            INTEGER,
+    n_win               INTEGER,
+    n_loss              INTEGER,
+    n_flat              INTEGER,
+    win_rate            REAL,
+    total_realized_pnl  REAL,
+    avg_realized_pnl    REAL,
+    avg_realized_return REAL,
+    avg_expected_edge   REAL,
+    avg_confidence      REAL,
+    edge_realization    REAL,
+    model_issue_rate    REAL,
+    edge_decayed        INTEGER DEFAULT 0,
+    effectiveness       TEXT,                   -- effective/ineffective/marginal/decayed/inconclusive/insufficient
+    generated_at        TEXT,
+    raw_json            TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_re_regime ON regime_effectiveness(regime);
+CREATE INDEX IF NOT EXISTS idx_re_eff    ON regime_effectiveness(effectiveness);
+
+-- ----------------------------------------------------------------------------
+-- 16. volatility_states — GARCH(1,1) 波动率聚集研究产物（Phase 3h：第三个真实模型）
+--    每行 = 一条价格序列的当前/预测波动与风险状态快照。由 runtime.garch.compute()
+--    每周期重算（快照语义整表重建）。⚠ 研究产物 enforced=0，未接入 live 交易链路。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS volatility_states (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_uid        TEXT NOT NULL UNIQUE,   -- hash(model|series_id)
+    model             TEXT,                   -- garch
+    method            TEXT,
+    series_id         TEXT,
+    series_kind       TEXT,                   -- pm_market / crypto / us_stock / macro
+    risk_state        TEXT,                   -- elevated / normal / calm
+    vol_trend         TEXT,                   -- rising / falling / stable
+    clustering        INTEGER DEFAULT 0,
+    vol_spike         INTEGER DEFAULT 0,
+    alpha             REAL,
+    beta              REAL,
+    persistence       REAL,
+    long_run_vol      REAL,
+    current_vol       REAL,
+    forecast_vol      REAL,
+    vol_ratio         REAL,
+    confidence        REAL,
+    n_obs             INTEGER,
+    data_sufficiency  TEXT,
+    generated_at      TEXT,
+    raw_json          TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_vs_risk ON volatility_states(risk_state);
+CREATE INDEX IF NOT EXISTS idx_vs_kind ON volatility_states(series_kind);
+
+-- ----------------------------------------------------------------------------
+-- 17. sizing_suggestions — Kelly + Markowitz 仓位建议（Phase 3i：PRD §11 优先级 4/5）
+--    每行 = 一条候选的 sizing 建议。由 runtime.position_sizing.compute() 每周期重算
+--    （快照语义整表重建）。⚠ 建议产物 enforced=0，未接入 agent_m/executor/probe 仓位。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sizing_suggestions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_uid        TEXT NOT NULL UNIQUE,   -- 复用候选 signal_uid
+    market_id         TEXT,
+    expected_edge     REAL,
+    variance          REAL,
+    variance_source   TEXT,                   -- garch / default
+    regime            TEXT,
+    kelly_raw         REAL,
+    kelly_fraction    REAL,
+    regime_scaler     REAL,
+    sized_fraction    REAL,                   -- Kelly × regime（绝对仓位建议）
+    markowitz_weight  REAL,                   -- 多信号相对配置
+    confidence        REAL,
+    generated_at      TEXT,
+    raw_json          TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ss_market ON sizing_suggestions(market_id);
+CREATE INDEX IF NOT EXISTS idx_ss_regime ON sizing_suggestions(regime);
+
+-- ----------------------------------------------------------------------------
+-- 18. enforcement_audit — 纸面强制层逐条调整审计（Phase 5：动态权重 + sizing 接入）
+--    每行 = 一条被 runtime.enforcement 改过 position_size 的信号。由 orchestrator 在汇总
+--    signals.json、写盘前调用（仅 env 门控 PA_ENFORCE_* 开启时；快照语义整表重建）。
+--    ⚠ 只改 position_size，不绕过 Agent M / executor dry-run；门控关时本表不写。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS enforcement_audit (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_uid                TEXT NOT NULL UNIQUE,   -- hash(enforce|market_id|signal_uid)
+    market_id              TEXT,
+    market_name            TEXT,
+    signal_uid             TEXT,
+    pair_id                TEXT,
+    source                 TEXT,
+    applied                TEXT,                   -- json: ["sizing","weight"]
+    original_position_size REAL,
+    final_position_size    REAL,
+    weight                 REAL,                   -- 命中的学习权重（无则 NULL）
+    recommendation         TEXT,                   -- keep/down_weight/retire_candidate/explore
+    sized_fraction         REAL,                   -- 命中的 Kelly×regime sizing（无则 NULL）
+    regime                 TEXT,
+    generated_at           TEXT,
+    raw_json               TEXT NOT NULL,
+    created_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ea_market ON enforcement_audit(market_id);
+CREATE INDEX IF NOT EXISTS idx_ea_applied ON enforcement_audit(applied);
+
+-- ----------------------------------------------------------------------------
 -- schema 版本（手工迁移用；本轮不引入 Alembic，留一张元表足够）
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
-INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '0.3.3-phase3c2');
+INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '0.3.12-phase5-enforce');

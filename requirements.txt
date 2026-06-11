@@ -1,0 +1,35 @@
+# Polymarket Arbitrage — Python 依赖
+# ----------------------------------------------------------------------------
+# Python: 3.9+（注：runtime/api.py 端点注解须用 Optional[X] 而非 PEP604 `X|None`，
+#         以兼容主机 3.9 venv 的 FastAPI 运行时签名 introspect——见 CLAUDE.md）。
+#
+# 安装（推荐隔离 venv）：
+#   python3 -m venv venv && source venv/bin/activate
+#   pip install -r requirements.txt
+# macOS 若报 SSL 证书校验失败（unable to get local issuer certificate）：
+#   pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
+#
+# 版本为已验证可跑的下限（floor）；本轮全量测试在 numpy 2.4.6 / pytest 9.0.3 上 220 passed。
+# ============================================================================
+
+# --- 核心运行时（runtime 量化模型 + agents + 主链路 collectors）---
+numpy>=2.0          # runtime 真实模型：协整 / HMM regime / GARCH / Kelly-Markowitz sizing + 回测
+requests>=2.31      # collectors / market_intelligence / agent_vibe 同步 HTTP
+certifi>=2024.0     # macOS Python SSL 根证书（agent_a aiohttp）
+aiohttp>=3.9        # agent_a + 异步 collectors（polygon/finnhub/okx 等）
+openai>=1.40        # llm_helper LLM 客户端（兼容自定义 base_url 中转）
+pandas>=2.2         # collectors / 历史分析 / 回测
+
+# --- Paper Runtime API（仅在起 FastAPI 服务时需要：runtime/api.py）---
+fastapi>=0.110
+uvicorn>=0.27
+
+# --- 测试 ---
+pytest>=8.0
+# Optional: read OKX feather funding in Phase 3d backfill (local files only)
+pyarrow>=15.0; python_version >= "3.10"
+
+# --- 可选数据源（按需启用；均为函数内惰性 import，主链路不强依赖）---
+# yfinance>=0.2     # 美股 / 港股历史行情
+# ccxt>=4.0         # 交易所行情（crypto）
+# longbridge        # 长桥证券 SDK（港美股，collect_hk_stocks_sdk.py）
