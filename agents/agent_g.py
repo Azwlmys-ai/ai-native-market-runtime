@@ -72,6 +72,57 @@ class AgentG:
         except Exception:
             return _default_model
 
+    def _get_llm_provider(self) -> dict:
+        """agent_g 专属 provider（model / api_base / api_key），不影响其他 Agent。"""
+        try:
+            from llm_helper import load_llm_config
+            config = load_llm_config()
+            provider = config.get("agent_providers", {}).get("agent_g", {})
+            return provider if isinstance(provider, dict) else {}
+        except Exception:
+            return {}
+
+    def _invoke_llm(self, prompt: str, temperature: float, max_tokens: int, timeout: int) -> str:
+        """仅替换 model / api_url / api_key_source；prompt 与 timeout 保持不变。"""
+        if call_llm is None:
+            raise RuntimeError(f"LLM helper unavailable: {_LLM_IMPORT_ERROR}")
+
+        provider = self._get_llm_provider()
+        api_base = provider.get("api_base")
+        api_key = provider.get("api_key")
+        if api_base and api_key:
+            import httpx
+            from openai import OpenAI
+
+            model = provider.get("model") or self._get_llm_model()
+            proxy = provider.get("proxy")
+            http_client = httpx.Client(
+                trust_env=False,
+                timeout=timeout,
+                proxy=proxy if proxy else None,
+            )
+            client = OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                timeout=timeout,
+                http_client=http_client,
+            )
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content
+
+        return call_llm(
+            prompt=prompt,
+            model=self._get_llm_model(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+
     def _generate_mock_trade_history(self) -> list:
         """在 dry-run 模式下生成合成交易历史，供学习循环使用。
 
@@ -331,10 +382,8 @@ class AgentG:
         try:
             if call_llm is None:
                 raise RuntimeError(f"LLM helper unavailable: {_LLM_IMPORT_ERROR}")
-            _model = self._get_llm_model()
-            response = call_llm(
+            response = self._invoke_llm(
                 prompt=prompt,
-                model=_model,
                 temperature=0.3,
                 max_tokens=2000,
                 timeout=LLM_TIMEOUT_SECONDS,
@@ -531,10 +580,8 @@ class AgentG:
         try:
             if call_llm is None:
                 raise RuntimeError(f"LLM helper unavailable: {_LLM_IMPORT_ERROR}")
-            _model = self._get_llm_model()
-            response = call_llm(
+            response = self._invoke_llm(
                 prompt=prompt,
-                model=_model,
                 temperature=0.3,
                 max_tokens=4000,
                 timeout=LLM_TIMEOUT_SECONDS,

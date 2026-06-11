@@ -10,7 +10,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from llm_helper import call_llm_sync
+from llm_helper import call_llm_sync, LLMModelError
 from _paths import get_base_dir
 from utils.market_data import get_okx_btc_context, get_polymarket_markets
 from utils.signals import ensure_signal_timestamps
@@ -22,6 +22,38 @@ class AgentF:
         self.logs_dir = self.base_dir / "logs"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self._model_errors = []
+
+    def _record_model_error(self, market_slug: str, error: LLMModelError):
+        entry = {
+            "agent": "agent_f",
+            "market": market_slug,
+            "error_type": error.error_type,
+            "fallback_used": error.fallback_used,
+            "models_tried": error.models_tried,
+            "message": str(error),
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._model_errors.append(entry)
+        fb = " fallback_used" if error.fallback_used else ""
+        self.log(f"⚠️ model_error ({error.error_type}{fb}): {market_slug[:50]} - {error}")
+
+    def _write_run_status(self):
+        if not self._model_errors:
+            return
+        status_file = self.data_dir / "agent_f_run_status.json"
+        with open(status_file, "w") as f:
+            json.dump(
+                {
+                    "timestamp": datetime.now().isoformat(),
+                    "signals_produced": 0,
+                    "model_errors": self._model_errors,
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
+        self.log(f"ℹ️  model_error 元数据已写入 {status_file}（未写入 signals.json）")
     
     def log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -129,8 +161,12 @@ BTC 价格：${btc_price:,.2f}
                         
                         self.log(f"✅ 发现机会: {market.get('slug', '')[:50]}... (置信度 {analysis.get('confidence')})")
             
+            except LLMModelError as e:
+                self._record_model_error(market.get("slug", ""), e)
+                continue
             except Exception as e:
-                self.log(f"⚠️  分析失败: {e}")
+                wrapped = LLMModelError(str(e), error_type="model_error", agent_id="agent_f")
+                self._record_model_error(market.get("slug", ""), wrapped)
                 continue
         
         return opportunities
@@ -171,7 +207,11 @@ BTC 价格：${btc_price:,.2f}
             
             self.log(f"✅ 已保存 {len(opportunities)} 个跨平台套利信号到 {output_file}")
         else:
-            self.log("ℹ️  无跨平台套利信号")
+            if self._model_errors:
+                self.log(f"ℹ️  无跨平台套利信号（{len(self._model_errors)} 次 model_error）")
+            else:
+                self.log("ℹ️  无跨平台套利信号")
+        self._write_run_status()
 
 def main():
     agent = AgentF()

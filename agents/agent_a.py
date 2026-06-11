@@ -5,7 +5,9 @@ Agent A - 市场数据采集器
 
 import json
 import asyncio
+import ssl
 import aiohttp
+import certifi
 import sys
 import subprocess
 from datetime import datetime
@@ -14,6 +16,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from _paths import get_base_dir
+
+
+def _aiohttp_ssl_connector():
+    """macOS 自带 Python 常缺根证书；用 certifi _bundle 避免 SSLCertVerificationError。"""
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    return aiohttp.TCPConnector(ssl=ctx)
+
 
 class AgentA:
     def __init__(self, base_dir=None):
@@ -38,7 +47,7 @@ class AgentA:
         self.log("采集 Polymarket 市场数据...")
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=_aiohttp_ssl_connector()) as session:
                 params = {
                     "limit": 100,
                     "active": "true",
@@ -105,7 +114,7 @@ class AgentA:
         self.log("采集 Google News...")
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=_aiohttp_ssl_connector()) as session:
                 url = "https://news.google.com/rss/search?q=cryptocurrency+OR+bitcoin+OR+prediction+market&hl=en-US&gl=US&ceid=US:en"
                 
                 async with session.get(url, timeout=30) as resp:
@@ -127,7 +136,7 @@ class AgentA:
         
         try:
             # FRED API 需要 API Key，这里使用公开数据端点
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=_aiohttp_ssl_connector()) as session:
                 url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFF"
                 
                 async with session.get(url, timeout=30) as resp:
@@ -202,7 +211,7 @@ class AgentA:
         self.log("采集 OKX 资金费率...")
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=_aiohttp_ssl_connector()) as session:
                 url = "https://www.okx.com/api/v5/public/funding-rate"
                 params = {"instId": "BTC-USDT-SWAP"}
                 

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from llm_helper import call_llm_sync
+from llm_helper import call_llm_hedged_race
 from _paths import get_base_dir
 from event_logger import write_event
 
@@ -21,6 +21,15 @@ from event_logger import write_event
 BASE_DIR = get_base_dir()
 DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = BASE_DIR / "logs"
+
+# Strong signal 阈值（保留原 LLM prompt 要求，代码侧再滤一层）
+STRONG_MIN_CONFIDENCE = 70
+STRONG_MIN_EV = 8.0
+# paper_probe 兜底（无 strong 时从规则通过市场确定性选 1–3 条低风险探针）
+PROBE_MAX_COUNT = 3
+PROBE_POSITION_SIZE = 0.02
+PROBE_CONFIDENCE_CAP = 45
+PROBE_MODEL = "agent_b"
 
 
 def log(message):
@@ -259,6 +268,120 @@ def enrich_signals(signals, latest_data, learned_rules):
     return enriched, skipped
 
 
+def _is_strong_signal(signal: dict) -> bool:
+    """Strong = 非 probe 且 confidence/EV 过线（与 prompt 要求一致）。"""
+    if not isinstance(signal, dict) or signal.get("probe"):
+        return False
+    try:
+        conf = float(signal.get("confidence", 0) or 0)
+        ev = float(signal.get("ev", signal.get("expected_value", 0)) or 0)
+    except (TypeError, ValueError):
+        return False
+    return conf >= STRONG_MIN_CONFIDENCE and ev >= STRONG_MIN_EV
+
+
+def _rule_match_label(market: dict) -> str:
+    strategy = market.get("learned_strategy", "")
+    mtype = market.get("market_type", "GTA_VI")
+    if strategy == "buy_NO_mid_range":
+        return f"mid_range_{mtype}"
+    if strategy == "buy_NO_extreme_high":
+        return "extreme_high_NHL"
+    return strategy or f"probe_{mtype}"
+
+
+def _build_paper_probe_signals(filtered_markets, latest_data, learned_rules,
+                               *, degraded: bool = False) -> list:
+    """从已通过规则预过滤的市场中确定性选最多 PROBE_MAX_COUNT 条低风险 paper_probe。
+
+    不调用 LLM；每条带完整可审计字段 + probe=true，供 Agent M dry-run 分级。
+    """
+    if not filtered_markets:
+        return []
+
+    ranked = sorted(
+        filtered_markets,
+        key=lambda m: (-float(m.get("liquidity") or 0), str(m.get("slug") or "")),
+    )[:PROBE_MAX_COUNT]
+
+    raw_batch = []
+    for market in ranked:
+        slug = market.get("slug")
+        if not slug:
+            continue
+        no_price = float(market.get("no_price", 0.5) or 0.5)
+        mtype = market.get("market_type", classify_market(market.get("question", "")))
+        rule_match = _rule_match_label(market)
+        raw_batch.append({
+            "market_slug": slug,
+            "side": "buy_no",
+            "price": no_price,
+            "ev": 5.0,                    # 低于 strong 线，明确为探针
+            "confidence": PROBE_CONFIDENCE_CAP,
+            "learned_rule_match": rule_match,
+            "reason": (
+                f"paper_probe: {mtype} 市场通过规则预筛但无 strong signal；"
+                f"liquidity=${float(market.get('liquidity') or 0):.0f}，"
+                f"no_price={no_price:.3f}，小额 dry-run 攒反馈"
+            ),
+            "holding_horizon_days": 14,
+            "failure_conditions": [
+                f"若 {market.get('question', slug)[:60]} 价格脱离学习区间（no 不在 0.4–0.6）",
+                "若结算前流动性跌破 $1,000 无法平仓",
+                "若 polymarket 数据持续 stale 导致定价失真" if degraded else
+                "若市场结构性变化使学习规则失效",
+            ],
+        })
+
+    enriched, skipped = enrich_signals(raw_batch, latest_data, learned_rules)
+    probes = []
+    for sig in enriched:
+        slug = sig.get("market_slug", "")
+        market = _market_index(latest_data).get(slug, {})
+        sig = dict(sig)
+        sig.update({
+            "probe": True,
+            "tier": "exploration",
+            "models_used": [PROBE_MODEL],
+            "source_markets": [slug, str(market.get("id", slug))],
+            "position_size": PROBE_POSITION_SIZE,
+            "confidence": min(float(sig.get("confidence", PROBE_CONFIDENCE_CAP)),
+                              PROBE_CONFIDENCE_CAP),
+            "evidence": {
+                "market_type": market.get("market_type", classify_market(market.get("question", ""))),
+                "learned_strategy": market.get("learned_strategy"),
+                "liquidity": market.get("liquidity"),
+                "no_price": market.get("no_price"),
+                "degraded_data": degraded,
+                "selection": "rule_pass_liquidity_rank",
+            },
+        })
+        probes.append(sig)
+
+    if skipped:
+        log(f"⚠️  paper_probe 跳过 {len(skipped)} 条（不可审计）")
+    return probes
+
+
+def _write_intelligence_report(payload: dict) -> None:
+    with open(DATA_DIR / 'intelligence_report.json', 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def _append_race_stats(entry: dict) -> None:
+    """Append hedged-race telemetry (research/ops only)."""
+    path = DATA_DIR / 'agent_b_race_stats.json'
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {"runs": []}
+        runs = payload.get("runs") or []
+        runs.append(entry)
+        payload["runs"] = runs[-500:]
+        payload["last_updated"] = datetime.now().isoformat()
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
+    except Exception as exc:
+        log(f"⚠️  agent_b_race_stats 写入失败: {exc}")
+
+
 def generate_enhanced_prompt(latest_data, learned_rules):
     """生成增强版 Prompt（集成学习规则）"""
     
@@ -341,122 +464,179 @@ def generate_enhanced_prompt(latest_data, learned_rules):
 
 def main():
     log("启动情报研究（集成学习规则）")
-    
-    # 1. 加载学习规则
+
     learned_rules = load_learned_rules()
     if learned_rules:
         log("✅ 加载学习规则（验证准确率 100%）")
     else:
         log("⚠️  未找到学习规则，使用原始逻辑")
-    
-    # 2. 加载最新数据
-    with open(DATA_DIR / 'latest_data.json', 'r') as f:
+
+    with open(DATA_DIR / 'latest_data.json', 'r', encoding='utf-8') as f:
         latest_data = json.load(f)
 
-    # 2a. 无 Polymarket 数据时早期退出，避免无效 LLM 调用
-    if not latest_data.get('polymarket_markets'):
+    input_markets = latest_data.get('polymarket_markets') or []
+    polymarket_status = latest_data.get('polymarket_status') or 'ok'
+    degraded = polymarket_status != 'ok'
+
+    diagnostics = {
+        'input_markets': len(input_markets),
+        'polymarket_status': polymarket_status,
+        'degraded_data': degraded,
+        'rejected_by_rules': 0,
+        'entered_llm_markets': 0,
+        'llm_called': False,
+        'raw_llm_signals': 0,
+        'enriched_llm_signals': 0,
+        'strong_count': 0,
+        'paper_probe_count': 0,
+        'drop_reasons': [],
+    }
+
+    if not input_markets:
         log("ℹ️  无 Polymarket 市场数据，跳过情报研究")
-        with open(DATA_DIR / 'intelligence_report.json', 'w') as f:
-            json.dump({
-                'timestamp': datetime.now().isoformat(),
-                'status': 'skipped',
-                'reason': 'no_polymarket_markets',
-                'report': '无 Polymarket 市场数据，跳过情报研究',
-                'signals_count': 0,
-                'signals': []
-            }, f, indent=2, ensure_ascii=False)
+        _write_intelligence_report({
+            'timestamp': datetime.now().isoformat(),
+            'status': 'skipped',
+            'reason': 'no_polymarket_markets',
+            'report': '无 Polymarket 市场数据，跳过情报研究',
+            'signals_count': 0,
+            'signals': [],
+            'diagnostics': diagnostics,
+        })
         return
 
-    polymarket_status = latest_data.get('polymarket_status')
-    if polymarket_status and polymarket_status != 'ok':
-        log(f"ℹ️  Polymarket 数据状态为 {polymarket_status}，跳过情报研究")
-        with open(DATA_DIR / 'intelligence_report.json', 'w') as f:
-            json.dump({
-                'timestamp': datetime.now().isoformat(),
-                'status': 'skipped',
-                'reason': f'polymarket_status={polymarket_status}',
-                'report': f'Polymarket 数据状态为 {polymarket_status}，跳过情报研究',
-                'signals_count': 0,
-                'signals': []
-            }, f, indent=2, ensure_ascii=False)
-        return
+    filtered_markets, rejected_markets = apply_learned_rules(input_markets, learned_rules)
+    diagnostics['rejected_by_rules'] = len(rejected_markets)
+    diagnostics['entered_llm_markets'] = len(filtered_markets)
 
-    # 3. 生成增强 Prompt
-    prompt, rejected_markets = generate_enhanced_prompt(latest_data, learned_rules)
-    
     if rejected_markets:
         log(f"📋 规则预过滤拒绝 {len(rejected_markets)} 个市场:")
         for r in rejected_markets[:5]:
             log(f"  - {r['market']}: {r['reason']}")
-    
-    # 4. 调用 LLM
-    try:
-        response = call_llm_sync(
-            agent_id='agent_b',
-            prompt=prompt,
-            timeout=120,
-            temperature=0.1
-        )
-        
-        # 5. 解析响应
-        if '```json' in response:
-            response = response.split('```json')[1].split('```')[0].strip()
-        elif '```' in response:
-            response = response.split('```')[1].split('```')[0].strip()
-        
-        result = json.loads(response)
-        raw_signals = result.get('signals', [])
-        signals, skipped_signals = enrich_signals(raw_signals, latest_data, learned_rules)
-        if skipped_signals:
-            log(f"⚠️  跳过 {len(skipped_signals)} 个不可审计信号")
-            for item in skipped_signals[:5]:
-                log(f"  - {item['reason']}")
-        
-        # 6. 保存结果
-        output = {
-            'timestamp': datetime.now().isoformat(),
-            'report': f"应用学习规则生成 {len(signals)} 个信号",
-            'signals_count': len(signals),
-            'signals': signals,
-            'raw_signals_count': len(raw_signals),
-            'skipped_signals': skipped_signals,
-            'rejected_by_rules': len(rejected_markets)
-        }
-        
-        with open(DATA_DIR / 'intelligence_report.json', 'w') as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
-        
-        log(f"✅ 生成 {len(signals)} 个信号")
 
-        # Emit runtime event for each generated signal
-        cycle_id = os.environ.get("PA_CYCLE_ID", f"signal_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
-        for sig in signals:
-            write_event(
-                cycle_id=cycle_id,
-                type="signal.generated",
-                agent="agent_b",
-                payload={
-                    "market_id": sig.get("market_id", ""),
-                    "market_name": sig.get("market_name", ""),
-                    "direction": sig.get("direction", ""),
-                    "price": sig.get("price", 0.5),
-                    "confidence": sig.get("confidence", 70),
-                    "source": sig.get("source", "agent_b"),
-                },
+    if degraded:
+        log(f"⚠️  Polymarket 数据状态={polymarket_status}（degraded）— 跳过 LLM，仅 paper_probe 兜底")
+
+    strong_signals = []
+    skipped_signals = []
+    raw_signals = []
+    llm_error = None
+    race_stats = {
+        "grok_started": False,
+        "deepseek_started": False,
+        "winner": None,
+        "elapsed_sec": 0.0,
+        "hedge_triggered": False,
+        "timeout": False,
+        "signals_generated": 0,
+        "timestamp": datetime.now().isoformat(),
+        "cycle_id": os.environ.get("PA_CYCLE_ID", ""),
+    }
+
+    if not degraded and filtered_markets:
+        prompt, _ = generate_enhanced_prompt(latest_data, learned_rules)
+        try:
+            diagnostics['llm_called'] = True
+            response, race_meta = call_llm_hedged_race(
+                agent_id='agent_b',
+                prompt=prompt,
+                temperature=0.1,
             )
-        
-    except Exception as e:
-        log(f"❌ 执行失败: {e}")
-        # 保存空报告
-        with open(DATA_DIR / 'intelligence_report.json', 'w') as f:
-            json.dump({
-                'timestamp': datetime.now().isoformat(),
-                'status': 'error',
-                'reason': 'llm_call_failed',
-                'report': f"执行失败: {e}",
-                'signals_count': 0,
-                'signals': []
-            }, f, indent=2, ensure_ascii=False)
+            race_stats.update(race_meta)
+            if '```json' in response:
+                response = response.split('```json')[1].split('```')[0].strip()
+            elif '```' in response:
+                response = response.split('```')[1].split('```')[0].strip()
+            result = json.loads(response)
+            raw_signals = result.get('signals', [])
+            diagnostics['raw_llm_signals'] = len(raw_signals)
+            enriched, skipped_signals = enrich_signals(raw_signals, latest_data, learned_rules)
+            diagnostics['enriched_llm_signals'] = len(enriched)
+            strong_signals = [s for s in enriched if _is_strong_signal(s)]
+            weak_n = len(enriched) - len(strong_signals)
+            if weak_n:
+                diagnostics['drop_reasons'].append(
+                    f"llm_below_strong_threshold:{weak_n}(need conf>={STRONG_MIN_CONFIDENCE}, ev>={STRONG_MIN_EV})")
+            if skipped_signals:
+                diagnostics['drop_reasons'].append(f"enrich_skipped:{len(skipped_signals)}")
+                log(f"⚠️  跳过 {len(skipped_signals)} 个不可审计 LLM 信号")
+        except Exception as e:
+            llm_error = str(e)
+            race_stats["timeout"] = "timeout" in str(e).lower() or race_stats.get("timeout", False)
+            log(f"❌ LLM 执行失败: {e}")
+            diagnostics['drop_reasons'].append(f"llm_error:{e}")
+
+    probe_signals = []
+    if not strong_signals:
+        probe_signals = _build_paper_probe_signals(
+            filtered_markets, latest_data, learned_rules, degraded=degraded)
+        if not probe_signals and not filtered_markets:
+            diagnostics['drop_reasons'].append("no_rule_pass_markets_for_probe")
+        elif not probe_signals:
+            diagnostics['drop_reasons'].append("probe_build_failed_audit")
+
+    final_signals = strong_signals + probe_signals
+    race_stats["signals_generated"] = len(final_signals)
+    race_stats["grok_started"] = race_stats.get("grok_started", diagnostics.get("llm_called", False))
+    _append_race_stats(race_stats)
+    diagnostics['strong_count'] = len(strong_signals)
+    diagnostics['paper_probe_count'] = len(probe_signals)
+    diagnostics['race_stats'] = race_stats
+
+    status = 'ok'
+    if degraded:
+        status = 'degraded'
+    elif llm_error and not final_signals:
+        status = 'error'
+    elif llm_error:
+        status = 'degraded'
+
+    report_lines = [
+        f"strong={len(strong_signals)}",
+        f"paper_probe={len(probe_signals)}",
+        f"input={len(input_markets)}",
+        f"rule_pass={len(filtered_markets)}",
+    ]
+    if degraded:
+        report_lines.append(f"data={polymarket_status}")
+
+    output = {
+        'timestamp': datetime.now().isoformat(),
+        'status': status,
+        'reason': llm_error or (f'polymarket_status={polymarket_status}' if degraded else None),
+        'report': "Agent B: " + ", ".join(report_lines),
+        'signals_count': len(final_signals),
+        'signals': final_signals,
+        'raw_signals_count': len(raw_signals),
+        'skipped_signals': skipped_signals,
+        'rejected_by_rules': len(rejected_markets),
+        'diagnostics': diagnostics,
+    }
+    _write_intelligence_report(output)
+
+    log(f"✅ 产出 {len(final_signals)} 条信号 "
+        f"(strong={len(strong_signals)}, paper_probe={len(probe_signals)})")
+    log(f"📊 诊断: input={diagnostics['input_markets']} "
+        f"rule_reject={diagnostics['rejected_by_rules']} "
+        f"llm_called={diagnostics['llm_called']} "
+        f"raw_llm={diagnostics['raw_llm_signals']}")
+
+    cycle_id = os.environ.get("PA_CYCLE_ID", f"signal_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}")
+    for sig in final_signals:
+        write_event(
+            cycle_id=cycle_id,
+            type="signal.generated",
+            agent="agent_b",
+            payload={
+                "market_id": sig.get("market_id", ""),
+                "market_name": sig.get("market_name", ""),
+                "direction": sig.get("direction", ""),
+                "price": sig.get("price", 0.5),
+                "confidence": sig.get("confidence", 70),
+                "source": sig.get("source", "agent_b"),
+                "probe": bool(sig.get("probe")),
+            },
+        )
 
 if __name__ == '__main__':
     main()

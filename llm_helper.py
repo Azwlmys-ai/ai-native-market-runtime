@@ -5,9 +5,17 @@ LLM 统一调用接口
 
 import os
 import json
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, wait
 from pathlib import Path
+from typing import Any
+
 from openai import OpenAI, APITimeoutError, APIError
+
+# Agent B hedged race defaults (Grok hang mitigation)
+AGENT_B_HEDGE_DELAY_SEC = 45
+AGENT_B_RACE_DEADLINE_SEC = 90
 
 _FALLBACK_SENTINELS = frozenset({
     "__SINGLE_PROVIDER_NO_FALLBACK__",
@@ -328,6 +336,136 @@ def call_llm_sync(agent_id: str, prompt: str, timeout: int = 60, max_retries: in
         agent_id=agent_id,
         models_tried=models_tried or model_chain,
         fallback_used=fallback_used,
+    )
+
+
+def _winner_label(future, grok_future, primary_model: str, fallback_model: str) -> str:
+    if future is grok_future:
+        return "grok"
+    return "deepseek" if "deepseek" in (fallback_model or "").lower() else fallback_model
+
+
+def _submit_daemon(fn) -> Future:
+    """Run fn on a daemon thread so loser hedge calls cannot block subprocess exit."""
+    fut: Future = Future()
+
+    def _runner() -> None:
+        try:
+            fut.set_result(fn())
+        except Exception as exc:
+            fut.set_exception(exc)
+
+    threading.Thread(target=_runner, daemon=True, name="llm_race").start()
+    return fut
+
+
+def call_llm_hedged_race(
+    agent_id: str,
+    prompt: str,
+    *,
+    hedge_delay_sec: float = AGENT_B_HEDGE_DELAY_SEC,
+    deadline_sec: float = AGENT_B_RACE_DEADLINE_SEC,
+    temperature: float | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Hedged race: Grok at T=0; DeepSeek Flash after hedge delay if Grok pending.
+
+    Returns (content, stats). Loser futures are abandoned (non-blocking).
+    """
+    config = load_llm_config()
+    route_id = routing_agent_id(agent_id)
+    primary_model = config["agent_models"].get(route_id) or config["agent_models"].get(agent_id)
+    if not primary_model:
+        raise ValueError(f"未找到 agent_id={agent_id} 的模型配置")
+
+    fallback_model = get_fallback_map(config).get(primary_model)
+    if not _is_valid_model(fallback_model):
+        content = call_llm_sync(agent_id, prompt, timeout=int(deadline_sec), temperature=temperature)
+        return content, {
+            "grok_started": True,
+            "deepseek_started": False,
+            "winner": "grok",
+            "elapsed_sec": 0.0,
+            "hedge_triggered": False,
+            "timeout": False,
+            "hedge_disabled": True,
+        }
+
+    if temperature is None:
+        temperature = 0.1 if agent_id == "agent_m_primary" else 0.7
+
+    stats: dict[str, Any] = {
+        "grok_started": True,
+        "deepseek_started": False,
+        "winner": None,
+        "elapsed_sec": 0.0,
+        "hedge_triggered": False,
+        "timeout": False,
+        "primary_model": primary_model,
+        "fallback_model": fallback_model,
+    }
+
+    t0 = time.monotonic()
+
+    def _remaining_timeout() -> int:
+        return max(1, int(deadline_sec - (time.monotonic() - t0)))
+
+    def _run_model(model: str) -> str:
+        return _call_single_model(
+            agent_id=agent_id,
+            routing_id=route_id,
+            current_model=model,
+            primary_model=primary_model,
+            prompt=prompt,
+            config=config,
+            timeout=_remaining_timeout(),
+            temperature=temperature,
+            max_retries=1,
+        )
+
+    grok_future = _submit_daemon(lambda: _run_model(primary_model))
+    flash_future = None
+
+    # Phase 1: Grok-only window (no extra API cost on fast path)
+    try:
+        content = grok_future.result(timeout=hedge_delay_sec)
+        stats["winner"] = "grok"
+        stats["elapsed_sec"] = round(time.monotonic() - t0, 2)
+        return content, stats
+    except Exception:
+        pass  # timeout or model error → hedge
+
+    stats["hedge_triggered"] = True
+    stats["deepseek_started"] = True
+    flash_future = _submit_daemon(lambda: _run_model(fallback_model))
+
+    pending = {grok_future, flash_future}
+    while pending and (time.monotonic() - t0) < deadline_sec:
+        done, pending = wait(
+            pending,
+            timeout=_remaining_timeout(),
+            return_when=FIRST_COMPLETED,
+        )
+        if not done:
+            break
+        for fut in done:
+            try:
+                content = fut.result()
+                stats["winner"] = _winner_label(
+                    fut, grok_future, primary_model, fallback_model
+                )
+                stats["elapsed_sec"] = round(time.monotonic() - t0, 2)
+                return content, stats
+            except LLMModelError:
+                continue
+
+    stats["timeout"] = True
+    stats["elapsed_sec"] = round(time.monotonic() - t0, 2)
+    raise LLMModelError(
+        f"[{agent_id}] hedged race deadline exceeded ({deadline_sec}s)",
+        error_type="timeout",
+        agent_id=agent_id,
+        models_tried=[primary_model, fallback_model],
+        fallback_used=stats["hedge_triggered"],
     )
 
 

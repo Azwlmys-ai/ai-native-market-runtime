@@ -171,7 +171,7 @@ def mine_arbitrage_opportunities():
     
     try:
         response = call_llm_sync(
-            agent_id='agent_d',  # 使用 DeepSeek-R1 深度推理
+            agent_id='agent_historical_miner',
             prompt=prompt,
             timeout=180,
             temperature=0.1
