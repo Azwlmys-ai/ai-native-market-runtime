@@ -1,0 +1,266 @@
+@import "tailwindcss" source(none);
+@source "./**/*.{ts,tsx}";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --background: #0f1d3a;
+  --foreground: #f1f5f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 16px;
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", ui-sans-serif, system-ui, sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Readability floor for migrated dense dashboard labels. */
+.text-\[7px\],
+.text-\[8px\],
+.text-\[9px\],
+.text-\[10px\],
+.text-\[11px\] {
+  font-size: 0.75rem !important;
+  line-height: 1rem !important;
+}
+
+/* Custom scrollbar */
+.custom-scroll::-webkit-scrollbar,
+* ::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.custom-scroll::-webkit-scrollbar-track,
+* ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb,
+* ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.15);
+  border-radius: 999px;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb:hover,
+* ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.3);
+}
+
+/* React Flow overrides */
+.react-flow__background {
+  background: transparent !important;
+}
+
+.react-flow__edge-path {
+  stroke-width: 1.5 !important;
+}
+
+/* Auto Demo active section highlight */
+.demo-section-active {
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.25);
+  border-radius: 8px;
+  transition: box-shadow 0.6s ease;
+}
+
+/* Smooth the transition for scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* ── Recording-safe / Screenshot-friendly overrides ─────── */
+.recording-safe .debug-toggle-bar {
+  display: none !important;
+}
+
+.recording-safe .debug-panels-area {
+  display: none !important;
+}
+
+/* Thinner scrollbar for presentation / recording */
+.recording-safe *::-webkit-scrollbar {
+  width: 2px;
+  height: 2px;
+}
+
+.recording-safe *::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.08);
+}
+
+/* Unified deep background — no visible seams */
+.recording-safe {
+  background: #020617 !important;
+}
+
+/* Prevent large bottom gaps in presentation */
+.presentation-mode .presentation-bottom-anchor {
+  min-height: 0;
+  flex-shrink: 1;
+}
+
+/* ── Visual Polish: Enterprise-Grade Animations ────────── */
+
+/* Subtle glow animation for critical alerts (softened for readability) */
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(239, 68, 68, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+  }
+}
+
+.glow-pulse {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+
+/* Shimmer loading effect */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, transparent 25%, rgba(148, 163, 184, 0.08) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Glass morphism base utility (brightened) */
+.glass-panel {
+  background: rgba(41, 55, 77, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+/* Enterprise KPI card */
+.kpi-card {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.kpi-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.15), transparent);
+}
+
+.kpi-card:hover {
+  border-color: rgba(148, 163, 184, 0.2);
+  transform: translateY(-1px);
+}
+
+/* Subtle grid pattern overlay */
+.bg-grid-subtle {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Incident severity pulse (softened) */
+@keyframes severity-pulse {
+  0%, 100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+.severity-pulse-active {
+  animation: severity-pulse 3s ease-in-out infinite;
+}
+
+/* Demo section highlight transitions */
+.demo-highlight {
+  transition: box-shadow 0.5s ease, border-color 0.5s ease;
+}
+
+.demo-highlight-active {
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.4), 0 4px 20px rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.3);
+}
+
+/* ── Incident Command Center Overlay ──────────────────── */
+@keyframes overlay-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes overlay-panel-enter {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.overlay-enter {
+  animation: overlay-enter 0.3s ease-out forwards;
+}
+
+.overlay-panel-enter {
+  animation: overlay-panel-enter 0.4s ease-out forwards;
+}
+
+/* ── Executive Mode smooth transitions ────────────────── */
+.executive-fade-enter {
+  opacity: 0;
+  transform: translateY(6px);
+  animation: executive-fade-in 0.35s ease-out forwards;
+}
+
+@keyframes executive-fade-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Step glow for replay timeline ────────────────────── */
+@keyframes step-glow {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(6, 182, 212, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.7);
+  }
+}
+
+.step-glow-active {
+  animation: step-glow 1.5s ease-in-out infinite;
+}
+
+/* ── Render performance optimization ────────────────── */
+.contain-layout {
+  contain: layout style;
+}
