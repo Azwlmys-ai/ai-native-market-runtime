@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.libo.cross-market-brief-cn-us</string>
+    <key>Comment</key>
+    <string>Cross Market Research Brief — CN Close to US Open (21:30 local / Beijing)</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>/Users/libo/.hermes/polymarket_arbitrage/scripts/cross_market_brief_cron.sh</string>
+        <string>cn-us</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>21</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/libo/shared_intelligence/research/cross_market_v0/logs/launchd_cn_us.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/libo/shared_intelligence/research/cross_market_v0/logs/launchd_cn_us.stderr.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
