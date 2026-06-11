@@ -162,7 +162,12 @@
 - **更多模型**（PRD 第十一节）：HMM（regime）、GARCH（波动聚集）、Markowitz（组合）、Kelly（仓位）——复用本模块的「确定性引擎 + 研究产物 + 影子表 + models_used 归因」骨架。
 - ✅ **跨资产 spread**：已完成（见 §5d，Phase 3f-x）——Polymarket × 加密/美股/宏观。
 - **dashboard**：`/research` 加「协整候选（含跨资产）」卡片（读 `GET /correlation-signals`）。
-- **加固待办**（enforcement 前）：跨周期去重/冷却、TOP_K 调参、降级腿跳过、shadow `_CONN` 测试 fixture 统一。
+- ✅ **加固**（2026-06-11，enforcement 前收尾）：
+  - **跨周期冷却**：`recent_cointegration_keys(base_dir, hours)` 读影子 signals 表近 N 小时 source=cointegration 的 (market,direction)，`to_pipeline_signals(recent_keys=...)` 跳过 → 同配对不每周期重复发 probe。orchestrator 桥按 `PA_COINT_COOLDOWN_HOURS`（默认 12）注入。best-effort，shadow 关→不冷却退化旧行为。
+  - **降级腿跳过**：`to_pipeline_signals(skip_degraded=True)` → 无 meta 价的腿**直接跳过**，不再伪造 0.5 成可成交信号；orchestrator 桥默认传 `skip_degraded=True`。
+  - **TOP_K env 覆盖**：`PA_COINT_TOP_K` 可调候选上限（非法回退默认 20）。bridge 另有 `PA_COINT_SIGNAL_CAP`（signal_merge）二次封顶。
+  - 测试 `tests/test_cointegration_hardening.py` **5 passed**；全量 **358 passed**。均 env 门控、默认关零回归。
+- shadow `_CONN` 测试 fixture 统一（低优先，未做）。
 
 ---
 

@@ -662,7 +662,12 @@ class Orchestrator:
                 latest = self.data_dir / "latest_data.json"
                 if latest.exists():
                     _meta = _coint.market_meta_from_latest(json.loads(latest.read_text()))
-                _csigs = _coint.to_pipeline_signals(_rep, _meta)
+                # 加固：跨周期冷却（近 PA_COINT_COOLDOWN_HOURS 小时同配对不重复发）
+                # + 跳过无价降级腿（绝不伪造 0.5 成可成交信号）。
+                _cooldown_h = float(os.environ.get("PA_COINT_COOLDOWN_HOURS", "12") or 12)
+                _recent = _coint.recent_cointegration_keys(self.base_dir, hours=_cooldown_h)
+                _csigs = _coint.to_pipeline_signals(_rep, _meta, recent_keys=_recent,
+                                                    skip_degraded=True)
                 if _csigs:
                     for _cs in _csigs:
                         _cs.setdefault("source_agent", _cs.get("source", "cointegration"))

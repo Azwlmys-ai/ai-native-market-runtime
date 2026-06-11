@@ -56,7 +56,16 @@ EPS = 1e-9
 CORR_MIN = 0.80         # 相关下限
 Z_MIN = 2.0             # spread 偏离下限（标准差倍数）
 HALF_LIFE_MAX = 20.0    # 均值回归半衰期上限（周期）
-TOP_K = 20              # 候选上限（按 |z| 排序取头部）
+TOP_K = 20              # 候选上限（按 |z| 排序取头部；可被 PA_COINT_TOP_K 覆盖）
+
+
+def _top_k(default: int = TOP_K) -> int:
+    """候选上限，env PA_COINT_TOP_K 可调（非法值回退默认）。"""
+    try:
+        v = int(os.environ.get("PA_COINT_TOP_K", "") or default)
+        return max(1, v)
+    except (TypeError, ValueError):
+        return default
 DATA_SUFFICIENCY_MEDIUM = 20  # 点数 >= 此值才算 medium，否则 low
 
 # 探索层（PRD §6 paper_probe「弱关联低风险试错」；env 门控 PA_COINT_EXPLORE=1，默认关）。
@@ -334,8 +343,10 @@ def _tier_sort_key(s: dict):
 
 
 def find_cross_asset_candidates(base_dir=None, field: str = "yes_price",
-                                top_k: int = TOP_K) -> dict:
+                                top_k: Optional[int] = None) -> dict:
     """Polymarket 市场(yes_price) × 外部资产序列 的协整研究。复用 analyze_pair。"""
+    if top_k is None:
+        top_k = _top_k()
     pm_hist = _ph.load_history(base_dir)
     asset_hist = _ph.load_asset_history(base_dir)
 
@@ -386,8 +397,10 @@ def find_cross_asset_candidates(base_dir=None, field: str = "yes_price",
 # ---------------------------------------------------------------------------
 
 def find_candidates(base_dir=None, field: str = "yes_price",
-                    top_k: int = TOP_K) -> dict:
+                    top_k: Optional[int] = None) -> dict:
     """加载价格历史 → pairwise 协整/spread 分析 → 过滤排序，返回候选与统计元信息。"""
+    if top_k is None:
+        top_k = _top_k()
     history = _ph.load_history(base_dir)
     series = {}
     for mid in history.keys():
@@ -431,8 +444,32 @@ def find_candidates(base_dir=None, field: str = "yes_price",
     }
 
 
+def recent_cointegration_keys(base_dir=None, hours: float = 12.0) -> set:
+    """跨周期冷却来源（加固）：读影子 signals 表里近 `hours` 内 source=cointegration 的
+    (market_id, direction)，供 to_pipeline_signals 跳过——避免同一配对每周期重复发 probe。
+
+    best-effort：PA_SHADOW_DB 未开/库不可用/出错 → 返回空集（不冷却，退化为旧行为）。
+    """
+    if hours <= 0:
+        return set()
+    if os.environ.get("PA_SHADOW_DB", "").lower() not in ("1", "true", "yes"):
+        return set()
+    try:
+        from datetime import timedelta
+        from runtime import _shadow
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = _shadow._rows(  # noqa: SLF001
+            "SELECT market_id, direction FROM signals "
+            "WHERE source='cointegration' AND COALESCE(generated_at,'') >= ?", (cutoff,))
+        return {(str(r["market_id"]), str(r["direction"]).upper()) for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[cointegration] recent_keys 读取失败（不冷却）: {exc}", flush=True)
+        return set()
+
+
 def to_pipeline_signals(report: dict, market_meta: Optional[dict] = None,
-                        position_size: float = 0.05) -> list:
+                        position_size: float = 0.05, recent_keys: Optional[set] = None,
+                        skip_degraded: bool = False) -> list:
     """把协整研究候选转成 signals.json 兼容的**方向性 leg 信号**，带真实 `models_used`。
 
     ⚠ 仅在 env 门控 `PA_COINT_SIGNALS=1` 下由 orchestrator 调用合入信号链路；
@@ -441,8 +478,12 @@ def to_pipeline_signals(report: dict, market_meta: Optional[dict] = None,
 
     market_meta: {market_id: {"name":.., "slug":.., "yes_price":.., "no_price":..}}（可空，缺则降级）。
     一对候选 → 最多 2 条 leg 信号：cheap leg（预期涨→YES）、rich leg（预期跌→NO）。
+    加固参数：
+      * recent_keys: 近周期已发过的 (market_id, direction)（大写）集合 → 跳过（跨周期冷却）。
+      * skip_degraded: True → 无 meta 价格的腿**直接跳过**（不再伪造 0.5 成可成交信号）。
     """
     meta = market_meta or {}
+    recent = recent_keys or set()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     out = []
     for cand in report.get("candidates", []) or []:
@@ -463,11 +504,17 @@ def to_pipeline_signals(report: dict, market_meta: Optional[dict] = None,
             mid = str(leg.get("market_id"))
             expectation = leg.get("expectation")
             direction = "YES" if expectation == "up" else "NO"
+            # 跨周期冷却：近周期已发过同 (market, direction) → 跳过。
+            if (mid, direction) in recent:
+                continue
             m = meta.get(mid) or meta.get(str(mid)) or {}
             yes_p = m.get("yes_price")
             no_p = m.get("no_price")
             price = (yes_p if direction == "YES" else no_p)
             degraded = price is None
+            # 加固：skip_degraded → 无价腿直接跳过，绝不伪造 0.5 成可成交信号。
+            if degraded and skip_degraded:
+                continue
             if price is None:
                 price = 0.5
             # Fix2：expected_value 改为**无量纲预期收益率**——价差预期回归 |z|·spread_std

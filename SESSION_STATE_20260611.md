@@ -51,8 +51,24 @@ sizing 消费协整边×GARCH方差×regime、全部 `enforced=False`。
 - 全量回归：**353 passed, 3 skipped**（沙箱；主机 356 passed）。
 - 驱动脚本原型 `outputs/verify_full_loop.py`（scratchpad，参考用，不入库）。
 
-## 5. 待办
+## 5. 三条非建模方向（依次完成）
 
-- **提交本测试**：`git add tests/test_full_loop_integration.py && git commit -m "test: full Learning Runtime cycle-end loop integration signoff"`。
-- 模型层已完整，剩余为：① 加固（协整跨周期去重/冷却、TOP_K 调参、降级腿跳过）；② 主机 live probe 受控验证（`EXECUTOR_DRY_RUN=1 PA_LIVE_PROBE=1` 需评审）；③ dashboard /research 卡片。
-- `a0b44b6`→`24a3e23` 共 7 个 commit 已 push；本文件 + 本测试提交后尚需单独 push。
+**① 协整桥加固**（enforcement 前收尾，均 env 门控、默认关零回归）
+- **跨周期冷却**：`cointegration.recent_cointegration_keys(base_dir, hours)` 读影子近 N 小时同 (market,direction) → `to_pipeline_signals(recent_keys=)` 跳过；orchestrator 桥按 `PA_COINT_COOLDOWN_HOURS`(默认12)注入。
+- **降级腿跳过**：`to_pipeline_signals(skip_degraded=True)` 无 meta 价腿直接跳过（不再伪造 0.5）；桥默认开。
+- **TOP_K env**：`PA_COINT_TOP_K` 可调（bridge 另有 `PA_COINT_SIGNAL_CAP`）。
+- 测试 `tests/test_cointegration_hardening.py` 5 passed；全量 **358 passed**。
+
+**② live probe 验证**
+- 安全逻辑已被 `tests/test_live_probe.py` 全覆盖（默认关 / 需 flag+非dry_run / USD·每周期·每日上限 / 日亏熔断→STOP_TRADING / 止损放行）。沙箱无法真实下单。
+- 交付：`PHASE4_LIVE_PROBE.md` §3b **受控首跑 runbook**（最小暴露：单笔$1/周期1笔/日$2 → 阶段0前置→1彩排→2单周期live→3小循环→放宽，含急停/回滚）。真实首跑是主机操作，需评审。
+
+**③ dashboard /research 卡片**
+- 新增只读 API `dashboard/app/api/learning/route.ts`（读 6 个 fact-source json）。
+- `dashboard/app/research/page.tsx` 加「模型与学习」section：by_model 有效性表 + 协整(含跨资产)候选 + regime/波动状态 + Kelly/Markowitz 仓位建议 + 规则淘汰候选。`tsc --noEmit` 干净。
+
+## 6. 待办（主机）
+
+- 提交本轮：`tests/test_full_loop_integration.py`、`tests/test_cointegration_hardening.py`、`runtime/cointegration.py`、`orchestrator.py`、`PHASE3F_COINTEGRATION.md`、`PHASE4_LIVE_PROBE.md`、`dashboard/app/api/learning/route.ts`、`dashboard/app/research/page.tsx`、`SESSION_STATE_20260611.md`。
+- dashboard 验证：主机 `cd dashboard && npm run build` 看 /research 新卡片渲染。
+- 后续仅余主机 live 首跑（②，需评审）+ 可选 shadow `_CONN` 测试 fixture 统一。
