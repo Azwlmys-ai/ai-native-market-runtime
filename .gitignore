@@ -48,3 +48,15 @@ venv/
 comprehensive_test_report.json
 load_balancer_test_report.json
 reports/
+
+# Research trial / validation outputs
+research/agent_g_trial_outputs/
+research/p0b_trial_outputs/
+research/p0c_validation/
+research/p0d_trial_outputs/
+research/model_sandbox/*.json
+research/model_sandbox/*.md
+
+# Date-stamped observation snapshots
+docs/observation/baseline_*.json
+docs/observation/daily_*.md

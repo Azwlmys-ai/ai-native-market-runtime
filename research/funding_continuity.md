@@ -1,6 +1,6 @@
 # Funding Continuity (Phase 3e)
 
-**Generated:** 2026-06-07T16:03:58.904471+00:00
+**Generated:** 2026-06-08T11:16:02.349405+00:00
 
 ## Audit
 
@@ -15,8 +15,8 @@
 - Output: `/Users/libo/.hermes/polymarket_arbitrage/data/historical/funding_rates.jsonl`
 - Dedup key: `symbol+timestamp`
 - Appended: **1**
-- Total rows: **980**
-- Per symbol: `{'BTC': 524, 'ETH': 456}`
+- Total rows: **1028**
+- Per symbol: `{'BTC': 572, 'ETH': 456}`
 - Missing (not fabricated): `[{'symbol': 'SOL', 'reason': 'no_local_json_or_feather', 'fabricated': False}]`
 
 ## Static sources
