@@ -156,6 +156,80 @@ def test_agent_m_model_error_not_counted_as_risk_reject(tmp_path):
     assert agent._grade(result) == "DEFER"
 
 
+@patch("llm_helper._call_single_model")
+def test_hedged_race_grok_fast_path_no_hedge(mock_call):
+    from llm_helper import call_llm_hedged_race
+
+    mock_call.return_value = "grok ok"
+    with patch("llm_helper.load_llm_config") as mock_cfg:
+        mock_cfg.return_value = {
+            "agent_models": {"agent_b": "grok-4-1-fast-reasoning"},
+            "agent_providers": {
+                "agent_b": {
+                    "model": "grok-4-1-fast-reasoning",
+                    "api_base": "https://api.example/v1",
+                    "api_key": "k",
+                },
+                "deepseek_v4_flash": {
+                    "model": "deepseek-v4-flash",
+                    "api_base": "https://api.deepseek.com",
+                    "api_key": "k",
+                },
+            },
+            "fallback_map": {"grok-4-1-fast-reasoning": "deepseek-v4-flash"},
+            "proxy_api_key": "k",
+            "proxy_api_base": "https://api.deepseek.com",
+        }
+        content, stats = call_llm_hedged_race("agent_b", "ping", hedge_delay_sec=0.01, deadline_sec=5)
+
+    assert content == "grok ok"
+    assert stats["winner"] == "grok"
+    assert stats["hedge_triggered"] is False
+    assert stats["deepseek_started"] is False
+    assert mock_call.call_count == 1
+
+
+@patch("llm_helper._call_single_model")
+def test_hedged_race_triggers_flash_on_grok_hang(mock_call):
+    import time
+    from llm_helper import call_llm_hedged_race
+
+    def _side_effect(**kwargs):
+        if kwargs["current_model"] == "grok-4-1-fast-reasoning":
+            time.sleep(0.05)
+            raise Exception("hang")
+        return "flash ok"
+
+    mock_call.side_effect = lambda **kw: _side_effect(**kw)
+
+    with patch("llm_helper.load_llm_config") as mock_cfg:
+        mock_cfg.return_value = {
+            "agent_models": {"agent_b": "grok-4-1-fast-reasoning"},
+            "agent_providers": {
+                "agent_b": {
+                    "model": "grok-4-1-fast-reasoning",
+                    "api_base": "https://api.example/v1",
+                    "api_key": "k",
+                },
+                "deepseek_v4_flash": {
+                    "model": "deepseek-v4-flash",
+                    "api_base": "https://api.deepseek.com",
+                    "api_key": "k",
+                },
+            },
+            "fallback_map": {"grok-4-1-fast-reasoning": "deepseek-v4-flash"},
+            "proxy_api_key": "k",
+            "proxy_api_base": "https://api.deepseek.com",
+        }
+        content, stats = call_llm_hedged_race("agent_b", "ping", hedge_delay_sec=0.01, deadline_sec=5)
+
+    assert content == "flash ok"
+    assert stats["hedge_triggered"] is True
+    assert stats["deepseek_started"] is True
+    assert stats["winner"] == "deepseek"
+    assert mock_call.call_count == 2
+
+
 def test_agent_m_risk_reject_still_reject(tmp_path):
     mod = _load_agent_m_module()
     agent = mod.AgentM(base_dir=str(tmp_path))
